@@ -275,8 +275,8 @@ function setLinuxRootLogin(){
 
 
     ${sudoCmd} sed -i 's/#\?TCPKeepAlive yes/TCPKeepAlive yes/g' /etc/ssh/sshd_config
-    ${sudoCmd} sed -i 's/#\?ClientAliveCountMax 3/ClientAliveCountMax 300/g' /etc/ssh/sshd_config
-    ${sudoCmd} sed -i 's/#\?ClientAliveInterval [0-9]*/ClientAliveInterval 120/g' /etc/ssh/sshd_config
+    ${sudoCmd} sed -i 's/#\?ClientAliveCountMax 3/ClientAliveCountMax 30/g' /etc/ssh/sshd_config
+    ${sudoCmd} sed -i 's/#\?ClientAliveInterval [0-9]*/ClientAliveInterval 40/g' /etc/ssh/sshd_config
 
     if [ "$osRelease" == "centos" ] ; then
 
@@ -365,6 +365,8 @@ function setLinuxDateZone(){
 
 # 软件安装
 
+
+
 function installBBR(){
     wget -O tcp_old.sh -N --no-check-certificate "https://raw.githubusercontent.com/chiakge/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp_old.sh && ./tcp_old.sh
 }
@@ -396,9 +398,9 @@ EOF
 
         ${sudoCmd}  $osSystemPackage install -y epel-release
 
-        $osSystemPackage install curl wget git unzip zip tar -y
-        $osSystemPackage install xz -y
-        $osSystemPackage install iputils-ping -y
+        $osSystemPackage install -y curl wget git unzip zip tar
+        $osSystemPackage install -y xz jq redhat-lsb-core 
+        $osSystemPackage install -y iputils-ping
 
     elif [ "$osRelease" == "ubuntu" ]; then
         
@@ -414,10 +416,10 @@ deb-src https://nginx.org/packages/ubuntu/ $osReleaseVersionCodeName nginx
 EOF
 
         $osSystemPackage update -y
-        ${sudoCmd} $osSystemPackage install software-properties-common -y
-        $osSystemPackage install curl wget git unzip zip tar -y
-        $osSystemPackage install xz-utils -y
-        $osSystemPackage install iputils-ping -y
+        ${sudoCmd} $osSystemPackage install -y software-properties-common
+        $osSystemPackage install -y curl wget git unzip zip tar
+        $osSystemPackage install -y xz-utils jq lsb-core lsb-release
+        $osSystemPackage install -y iputils-ping
 
 
     elif [ "$osRelease" == "debian" ]; then
@@ -433,9 +435,9 @@ deb-src http://nginx.org/packages/debian/ $osReleaseVersionCodeName nginx
 EOF
         
         $osSystemPackage update -y
-        $osSystemPackage install curl wget git unzip zip tar -y
-        $osSystemPackage install xz-utils -y
-        $osSystemPackage install iputils-ping -y
+        $osSystemPackage install -y curl wget git unzip zip tar
+        $osSystemPackage install -y xz-utils jq lsb-core lsb-release
+        $osSystemPackage install -y iputils-ping
     fi
 }
 
@@ -550,9 +552,13 @@ function installSoftOhMyZsh(){
 # 网络测速
 
 function vps_netflix(){
+    # bash <(curl -sSL https://raw.githubusercontent.com/Netflixxp/NF/main/nf.sh)
     # bash <(curl -sSL "https://github.com/CoiaPrant/Netflix_Unlock_Information/raw/main/netflix.sh")
-	wget -N --no-check-certificate https://github.com/CoiaPrant/Netflix_Unlock_Information/raw/main/netflix.sh && chmod +x netflix.sh && ./netflix.sh
-    # wget -O nf https://github.com/sjlleo/netflix-verify/releases/download/2.01/nf_2.01_linux_amd64 && chmod +x nf && clear && ./nf
+	# wget -N --no-check-certificate https://github.com/CoiaPrant/Netflix_Unlock_Information/raw/main/netflix.sh && chmod +x netflix.sh && ./netflix.sh
+
+	wget -O netflix.sh -N --no-check-certificate https://github.com/CoiaPrant/MediaUnlock_Test/raw/main/check.sh && chmod +x netflix.sh && ./netflix.sh
+
+    # wget -N -O nf https://github.com/sjlleo/netflix-verify/releases/download/2.01/nf_2.01_linux_amd64 && chmod +x nf && clear && ./nf
 }
 
 
@@ -576,6 +582,168 @@ function vps_testrace(){
 function vps_LemonBench(){
     wget -O LemonBench.sh -N --no-check-certificate https://ilemonra.in/LemonBenchIntl && chmod +x LemonBench.sh && ./LemonBench.sh fast
 }
+
+
+
+
+
+versionWgcf="2.2.2"
+downloadFilenameWgcf="wgcf_${versionWgcf}_linux_amd64"
+configWgcfBinPath="/usr/local/bin"
+configWgcfConfigFilePath="${HOME}/wireguard"
+configWgcfAccountFilePath="$configWgcfConfigFilePath/wgcf-account.toml"
+configWgcfProfileFilePath="$configWgcfConfigFilePath/wgcf-profile.conf"
+
+function installWireguard(){
+
+    getTrojanAndV2rayVersion "wgcf"
+    green " =================================================="
+    green "    开始安装 Wireguard 和 Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} !"
+    red "    需要先使用安装BBR脚本 安装原版本BBR, 不能安装bbr plus"
+    red "    Centos 7 推荐安装4.11 内核, 使用本脚本第一项BBR脚本安装原版BBR即可"
+    red "    Debian或Ubuntu 也可以使用 本脚本里的新版BBR安装脚本安装原版BBR, 内核在5.4以上"
+    red "    安装内核有风险, 导致VPS无法启动, 请慎重使用"
+    green " =================================================="
+
+    green "当前Linux kernel devel 内核版本为: $(ls /usr/src/kernels)"
+    green "当前Linux内核版本为: $(uname -r)"
+    echo ""
+    green "安装 Wireguard 需要保证kernel，kernel-devel，kernel-headers 版本一致"
+
+	read -p "是否继续操作? 请先确认linux内核已正确安装 直接回车默认继续操作, 请输入[Y/n]?" isContinueInput
+	isContinueInput=${isContinueInput:-Y}
+
+	if [[ $isContinueInput == [Yy] ]]; then
+		echo ""
+	else 
+        green " 请先用本脚本第一项安装BBR的脚本 安装原版BBR, linux内核更改为4.11 !"
+		exit
+	fi
+
+    mkdir -p ${configWgcfConfigFilePath}
+    mkdir -p ${configWgcfBinPath}
+    cd ${configWgcfConfigFilePath}
+
+    # https://github.com/ViRb3/wgcf/releases/download/v2.2.2/wgcf_2.2.2_linux_amd64
+    wget -O ${configWgcfPath}/wgcf --no-check-certificate "https://github.com/ViRb3/wgcf/releases/download/v${versionWgcf}/${downloadFilenameWgcf}"
+    ${sudoCmd} chmod +x ${configWgcfPath}/wgcf
+
+    if [[ -f ${configWgcfPath}/wgcf ]]; then
+
+        green " Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} 下载成功!"
+
+        # ${configWgcfPath}/wgcf register --config "${configWgcfAccountFilePath}"
+        # ${configWgcfPath}/wgcf generate --config "${configWgcfProfileFilePath}"
+
+        ${configWgcfPath}/wgcf register 
+        ${configWgcfPath}/wgcf generate 
+
+        sed -i '/AllowedIPs = 0\.0\.0\.0/d' ${configWgcfProfileFilePath}
+        sed -i 's/engage\.cloudflareclient\.com/162\.159\.192\.1/g'  ${configWgcfProfileFilePath}
+
+    else
+        ren "  Wgcf ${versionWgcf} 下载失败!"
+        exit
+    fi
+
+    green "  开始安装 Wireguard !"
+    bash <(curl -sSL https://raw.githubusercontent.com/jinwyp/one_click_script/master/wireguard.sh)
+    # wget -O wireguard.sh -N --no-check-certificate "https://raw.githubusercontent.com/teddysun/across/master/wireguard.sh" && chmod 755 wireguard.sh && ./wireguard.sh -r
+
+
+    echo "nameserver 8.8.8.8" >>  /etc/resolv.conf
+    echo "nameserver 8.8.4.4" >>  /etc/resolv.conf
+    echo "nameserver 1.1.1.1" >>  /etc/resolv.conf
+    echo "nameserver 9.9.9.9" >>  /etc/resolv.conf
+    echo "nameserver 9.9.9.10" >>  /etc/resolv.conf
+    echo "nameserver 8.8.8.8" >>  /etc/resolv.conf
+
+
+    cp ${configWgcfProfileFilePath} /etc/wireguard/wgcf.conf 
+
+    echo 
+    green " =================================================="
+    
+    ${sudoCmd} wg-quick up wgcf
+
+    echo 
+    green "  验证 Wireguard 是否启动正常 检测是否使用 CLOUDFLARE 的 ipv6 访问 !"
+    isWireguardIpv6Working=$(curl -6 ip.p3terx.com | grep CLOUDFLARENET )
+    echo
+    echo "curl -6 ip.p3terx.com"
+    curl -6 ip.p3terx.com 
+    echo
+
+	if [[ -n "$isWireguardIpv6Working" ]]; then	
+		green " Wireguard 启动正常! "
+
+        ${sudoCmd} wg-quick down wgcf
+        echo
+	else 
+		green " ================================================== "
+		red " Wireguard 启动失败, 请检查linux 内核安装是否正确, 卸载后重新安装"
+		green " ================================================== "
+		exit
+	fi
+
+
+    ${sudoCmd} systemctl daemon-reload
+
+    # 启用守护进程
+    ${sudoCmd} systemctl start wg-quick@wgcf
+
+    # 设置开机启动
+    ${sudoCmd} systemctl enable wg-quick@wgcf
+
+
+    green " ================================================== "
+    green "  Wireguard 和 Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} 安装成功 !"
+    green "  用本脚本安装v2ray或xray 可以选择是否解除 google 验证码 和 Netflix 的限制 !"
+    green "  其他脚本安装的v2ray或xray 请自行替换 v2ray或xray 配置文件!"
+    green " ================================================== "
+    
+}
+
+
+function removeWireguard(){
+    green " ================================================== "
+    red " 准备卸载已安装 Wireguard 和 Cloudflare Warp 命令行工具 Wgcf "
+    green " ================================================== "
+
+    if [ -f "${configWgcfBinPath}/wgcf" ]; then
+        ${sudoCmd} systemctl stop wg-quick@wgcf.service
+        ${sudoCmd} systemctl disable wg-quick@wgcf.service
+    else 
+        red " 系统没有安装 Wireguard 和 Wgcf, 退出卸载"
+        exit
+    fi
+
+    $osSystemPackage -y remove wireguard-dkms
+    $osSystemPackage -y remove wireguard-tools
+
+    rm -rf ${configWgcfConfigFilePath}
+
+    rm -f ${osSystemMdPath}wg-quick@wgcf.service
+
+    rm -f /usr/bin/wg
+    rm -f /usr/bin/wg-quick
+    rm -f /usr/share/man/man8/wg.8
+    rm -f /usr/share/man/man8/wg-quick.8
+
+    [ -d "/etc/wireguard" ] && ("rm -rf /etc/wireguard")
+
+    modprobe -r wireguard
+
+    green " ================================================== "
+    green "  Wireguard 和 Cloudflare Warp 命令行工具 Wgcf 卸载完毕 !"
+    green " ================================================== "
+
+  
+}
+
+
+
+
 
 
 
@@ -724,6 +892,12 @@ function getTrojanAndV2rayVersion(){
         versionTrojanWeb=$(getGithubLatestReleaseVersion "Jrohy/trojan")
         downloadFilenameTrojanWeb="trojan"
         echo "versionTrojanWeb: ${versionTrojanWeb}"
+    fi
+
+    if [[ $1 == "wgcf" ]] ; then
+        versionWgcf=$(getGithubLatestReleaseVersion "ViRb3/wgcf")
+        downloadFilenameWgcf="wgcf_${versionWgcf}_linux_amd64"
+        echo "versionWgcf: ${versionWgcf}"
     fi
 
 }
@@ -1844,6 +2018,31 @@ function installV2ray(){
     fi
 
 
+
+
+    read -p "是否使用IPV6 解锁Google 验证码 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]?" isV2rayUnlockGoogleInput
+    isV2rayUnlockGoogleInput=${isV2rayUnlockGoogleInput:-n}
+
+    V2rayUnlockText=""
+
+    if [[ $isV2rayUnlockGoogleInput == [Yy] ]]; then
+        V2rayUnlockText="\"geosite:google\""
+    fi
+
+
+    read -p "是否使用IPV6 解锁Netflix 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]?" isV2rayUnlockNetflixInput
+    isV2rayUnlockNetflixInput=${isV2rayUnlockNetflixInput:-n}
+    
+    if [[ $isV2rayUnlockNetflixInput == [Yy] ]]; then
+        V2rayUnlockText="\"geosite:netflix\""
+    fi
+
+    if [[ $isV2rayUnlockGoogleInput == [Yy] && $isV2rayUnlockNetflixInput == [Yy] ]]; then
+        V2rayUnlockText="\"geosite:netflix\", \"geosite:google\""
+    fi
+
+
+
     if [ "$isXray" = "no" ] ; then
         getTrojanAndV2rayVersion "v2ray"
         green " =================================================="
@@ -1995,6 +2194,7 @@ function installV2ray(){
                         "level": 0,
                         "email": "password210@gmail.com"
                     },
+                    {
                         "password": "${configTrojanPasswordPrefixInput}202011",
                         "level": 0,
                         "email": "password211@gmail.com"
@@ -2044,6 +2244,7 @@ function installV2ray(){
                         "level": 0,
                         "email": "password220@gmail.com"
                     },
+                    {
                         "password": "${configTrojanPasswordPrefixInput}202021",
                         "level": 0,
                         "email": "password221@gmail.com"
@@ -2212,7 +2413,10 @@ EOM
                     }
 EOM
 
-    read -r -d '' v2rayConfigOutboundInput << EOM
+
+    if [[ $isV2rayUnlockGoogleInput == [Nn] && $isV2rayUnlockNetflixInput == [Nn] ]]; then
+        
+        read -r -d '' v2rayConfigOutboundInput << EOM
     "outbounds": [
         {
             "tag": "direct",
@@ -2226,6 +2430,43 @@ EOM
         }
     ]
 EOM
+    else
+
+        read -r -d '' v2rayConfigOutboundInput << EOM
+    "outbounds": [
+        {
+            "tag":"IP4_out",
+            "protocol": "freedom",
+            "settings": {}
+        },
+        {
+            "tag":"IP6_out",
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "UseIPv6" 
+            }
+        }
+    ],    
+    "routing": {
+        "rules": [
+            {
+                "type": "field",
+                "outboundTag": "IP6_out",
+                "domain": [${V2rayUnlockText}] 
+            },
+            {
+                "type": "field",
+                "outboundTag": "IP4_out",
+                "network": "udp,tcp"
+            }
+        ]
+    }
+EOM
+        
+    fi
+
+
+
 
     read -r -d '' v2rayConfigLogInput << EOM
     "log" : {
@@ -3386,6 +3627,7 @@ function startMenuOther(){
     green " 以下是 VPS 测网速工具"
     red " 脚本测速会大量消耗 VPS 流量，请悉知！"
     green " 31. 测试VPS 是否支持Netflix, 检测IP解锁范围及对应所在的地区"
+    echo
     green " 32. superspeed 三网纯测速 （全国各地三大运营商部分节点全面测速）"
     green " 33. 由teddysun 编写的Bench 综合测试 （包含系统信息 IO 测试 多处数据中心的节点测试 ）"
 	green " 34. testrace 回程路由测试 （四网路由测试）"
@@ -3393,7 +3635,9 @@ function startMenuOther(){
     green " 36. ZBench 综合网速测试 （包含节点测速, Ping 以及 路由测试）"
 
     echo
-    green " 41. 安装新版本 BBR-PLUS 加速6合一脚本"
+    green " 41. 安装新版本 BBR-PLUS 加速6合一脚本" 
+    green " 42. 安装 WireGuard, 用于解锁 google 验证码 和 Netflix 限制" 
+    green " 43. 卸载 WireGuard" 
     echo
     green " 9. 返回上级菜单"
     green " 0. 退出脚本"
@@ -3488,6 +3732,7 @@ function startMenuOther(){
             removeV2ray
         ;;  
         31 )
+            installPackage
             vps_netflix
         ;;                                                         
         32 )
@@ -3507,7 +3752,13 @@ function startMenuOther(){
         ;;        
         41 )
             installBBR2
-        ;;        
+        ;; 
+        42 )
+            installWireguard
+        ;;   
+        43 )
+            removeWireguard
+        ;;                       
         9)
             start_menu
         ;;
@@ -3538,7 +3789,7 @@ function start_menu(){
     fi
 
     green " =================================================="
-    green " Trojan Trojan-go V2ray 一键安装脚本 2021-03-06 更新.  系统支持：centos7+ / debian9+ / ubuntu16.04+"
+    green " Trojan Trojan-go V2ray 一键安装脚本 2021-03-12 更新.  系统支持：centos7+ / debian9+ / ubuntu16.04+"
     red " *请不要在任何生产环境使用此脚本 请不要有其他程序占用80和443端口"
     green " =================================================="
     green " 1. 安装 BBR-PLUS 加速4合一脚本"
@@ -3568,14 +3819,15 @@ function start_menu(){
     red " 21. 卸载 trojan-go, v2ray或xray 和 nginx"
     echo
     green " 28. 查看已安装的配置和用户密码等信息"
-    green " 29. 安装 trojan 和 v2ray 可视化管理面板"
-    green " 30. 不安装nginx,只安装trojan或v2ray或xray(xtls),可选择是否安装SSL证书"
+    green " 29. 子菜单 安装 trojan 和 v2ray 可视化管理面板"
+    green " 30. 不安装nginx,只安装trojan或v2ray或xray,可选安装SSL证书, 方便与现有网站或宝塔面板集成"
     green " =================================================="
     green " 31. 安装OhMyZsh与插件zsh-autosuggestions, Micro编辑器 等软件"
-    green " 32. 设置可以使用root登陆"
+    green " 32. 开启root用户SSH登陆, 如谷歌云默认关闭root登录,可以通过此项开启"
     green " 33. 修改SSH 登陆端口号"
     green " 34. 设置时区为北京时间"
-    green " 41. VPS 测网速工具 和 VPS是否支持Netflix 测试工具"
+    green " 35. 用 VI 编辑 authorized_keys 文件, 方便填入公钥, 免密码登录, 增加安全性"
+    green " 41. 子菜单 测网速工具, Netflix 测试工具, 解锁Netflix和去除google验证码工具"
     green " 0. 退出脚本"
     echo
     read -p "请输入数字:" menuNumberInput
@@ -3694,6 +3946,9 @@ function start_menu(){
             sleep 4s
             start_menu
         ;;
+        35 )
+            editLinuxLoginWithPublicKey
+        ;;        
         29 )
             startMenuOther
         ;;
@@ -3703,10 +3958,7 @@ function start_menu(){
         41 )
             startMenuOther
         ;;
-        77 )
-            editLinuxLoginWithPublicKey
-        ;;
-        78 )
+        89 )
             installPackage
         ;;
         88 )
@@ -3718,6 +3970,7 @@ function start_menu(){
             getTrojanAndV2rayVersion "trojan-web"
             getTrojanAndV2rayVersion "v2ray"
             getTrojanAndV2rayVersion "xray"
+            getTrojanAndV2rayVersion "wgcf"
         ;;
         0 )
             exit 1
