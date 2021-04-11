@@ -262,11 +262,11 @@ install_wg_pkgs() {
     case "$(_os)" in
         ubuntu|debian|raspbian)
             _error_detect "apt-get update"
-            _error_detect "apt-get -y install qrencode"
-            _error_detect "apt-get -y install iptables"
-            _error_detect "apt-get -y install bc"
-            _error_detect "apt-get -y install gcc"
-            _error_detect "apt-get -y install make"
+            # _error_detect "apt-get -y install qrencode"
+            # _error_detect "apt-get -y install iptables"
+            # _error_detect "apt-get -y install bc"
+            # _error_detect "apt-get -y install gcc"
+            # _error_detect "apt-get -y install make"
             _error_detect "apt-get -y install libmnl-dev"
             _error_detect "apt-get -y install libelf-dev"
             if [ ! -d "/usr/src/linux-headers-$(uname -r)" ]; then
@@ -278,20 +278,20 @@ install_wg_pkgs() {
             fi
             ;;
         fedora)
-            _error_detect "dnf -y install qrencode"
-            _error_detect "dnf -y install bc"
-            _error_detect "dnf -y install gcc"
-            _error_detect "dnf -y install make"
+            #_error_detect "dnf -y install qrencode"
+            # _error_detect "dnf -y install bc"
+            # _error_detect "dnf -y install gcc"
+            # _error_detect "dnf -y install make"
             _error_detect "dnf -y install libmnl-devel"
             _error_detect "dnf -y install elfutils-libelf-devel"
             [ ! -d "/usr/src/kernels/$(uname -r)" ] && _error_detect "dnf -y install kernel-headers" && _error_detect "dnf -y install kernel-devel"
             ;;
         centos)
             _error_detect "yum -y install epel-release"
-            _error_detect "yum -y install qrencode"
-            _error_detect "yum -y install bc"
-            _error_detect "yum -y install gcc"
-            _error_detect "yum -y install make"
+            #_error_detect "yum -y install qrencode"
+            #_error_detect "yum -y install bc"
+            #_error_detect "yum -y install gcc"
+            # _error_detect "yum -y install make"
             _error_detect "yum -y install yum-utils"
             if [ -n "$(_os_ver)" -a "$(_os_ver)" -eq 8 ]; then
                 yum-config-manager --enable PowerTools > /dev/null 2>&1 || yum-config-manager --enable powertools > /dev/null 2>&1
@@ -360,13 +360,13 @@ install_wg_3() {
         ubuntu)
             _error_detect "add-apt-repository ppa:wireguard/wireguard"
             _error_detect "apt-get update"
-            _error_detect "apt-get -y install --no-install-recommends wireguard-tools"
+            _error_detect "apt-get -y install --no-install-recommends wireguard-tools wireguard"
             ;;
         debian)
             echo "deb http://deb.debian.org/debian/ unstable main" > /etc/apt/sources.list.d/unstable.list
             printf 'Package: *\nPin: release a=unstable\nPin-Priority: 90\n' > /etc/apt/preferences.d/limit-unstable
             _error_detect "apt-get update"
-            _error_detect "apt-get -y install --no-install-recommends wireguard-tools"
+            _error_detect "apt-get -y install --no-install-recommends wireguard-tools wireguard"
             ;;
         fedora)
             if [ -n "$(_os_ver)" -a "$(_os_ver)" -lt 31 ]; then

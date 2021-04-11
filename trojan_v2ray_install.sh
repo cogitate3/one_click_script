@@ -35,19 +35,43 @@ bold(){
 }
 
 
-
+osCPU="intel"
+osArchitecture="arm"
 osInfo=""
 osRelease=""
 osReleaseVersion=""
 osReleaseVersionNo=""
-osReleaseVersionCodeName=""
+osReleaseVersionCodeName="CodeName"
 osSystemPackage=""
 osSystemMdPath=""
 osSystemShell="bash"
 
-# 系统检测版本
+
+function checkArchitecture(){
+	# https://stackoverflow.com/questions/48678152/how-to-detect-386-amd64-arm-or-arm64-os-architecture-via-shell-bash
+
+	case $(uname -m) in
+		i386)   osArchitecture="386" ;;
+		i686)   osArchitecture="386" ;;
+		x86_64) osArchitecture="amd64" ;;
+		arm)    dpkg --print-architecture | grep -q "arm64" && osArchitecture="arm64" || osArchitecture="arm" ;;
+		* )     osArchitecture="arm" ;;
+	esac
+}
+
+function checkCPU(){
+	osCPUText=$(cat /proc/cpuinfo | grep vendor_id | uniq)
+	if [[ $osCPUText =~ "GenuineIntel" ]]; then
+		osCPU="intel"
+    else
+        osCPU="amd"
+    fi
+
+	# green " Status 状态显示--当前CPU是: $osCPU"
+}
+
+# 检测系统发行版代号
 function getLinuxOSRelease(){
-    # copy from 秋水逸冰 ss scripts
     if [[ -f /etc/redhat-release ]]; then
         osRelease="centos"
         osSystemPackage="yum"
@@ -86,12 +110,15 @@ function getLinuxOSRelease(){
     fi
 
     getLinuxOSVersion
+    checkArchitecture
+	checkCPU
 
     [[ -z $(echo $SHELL|grep zsh) ]] && osSystemShell="bash" || osSystemShell="zsh"
 
-    echo "OS info: ${osInfo}, ${osRelease}, ${osReleaseVersion}, ${osReleaseVersionNo}, ${osReleaseVersionCodeName}, ${osSystemShell}, ${osSystemPackage}, ${osSystemMdPath}"
+    green " 系统信息: ${osInfo}, ${osRelease}, ${osReleaseVersion}, ${osReleaseVersionNo}, ${osReleaseVersionCodeName}, ${osCPU} CPU ${osArchitecture}, ${osSystemShell}, ${osSystemPackage}, ${osSystemMdPath}"
 }
 
+# 检测系统版本号
 getLinuxOSVersion(){
     if [[ -s /etc/redhat-release ]]; then
         osReleaseVersion=$(grep -oE '[0-9.]+' /etc/redhat-release)
@@ -99,9 +126,11 @@ getLinuxOSVersion(){
         osReleaseVersion=$(grep -oE '[0-9.]+' /etc/issue)
     fi
 
+    # https://unix.stackexchange.com/questions/6345/how-can-i-get-distribution-name-and-version-number-in-a-simple-shell-script
+
     if [ -f /etc/os-release ]; then
         # freedesktop.org and systemd
-        . /etc/os-release
+        source /etc/os-release
         osInfo=$NAME
         osReleaseVersionNo=$VERSION_ID
 
@@ -116,11 +145,13 @@ getLinuxOSVersion(){
         # For some versions of Debian/Ubuntu without lsb_release command
         . /etc/lsb-release
         osInfo=$DISTRIB_ID
+        
         osReleaseVersionNo=$DISTRIB_RELEASE
     elif [ -f /etc/debian_version ]; then
         # Older Debian/Ubuntu/etc.
         osInfo=Debian
-        osReleaseVersionNo=$(cat /etc/debian_version)
+        osReleaseVersion=$(cat /etc/debian_version)
+        osReleaseVersionNo=$(sed 's/\..*//' /etc/debian_version)
     elif [ -f /etc/redhat-release ]; then
         osReleaseVersion=$(grep -oE '[0-9.]+' /etc/redhat-release)
     else
@@ -249,7 +280,7 @@ function editLinuxLoginWithPublicKey(){
 
 function setLinuxRootLogin(){
 
-    read -p "是否设置允许root登陆(ssh密钥方式 或 密码方式登陆 )? 请输入[Y/n]?" osIsRootLoginInput
+    read -p "是否设置允许root登陆(ssh密钥方式 或 密码方式登陆 )? 请输入[Y/n]:" osIsRootLoginInput
     osIsRootLoginInput=${osIsRootLoginInput:-Y}
 
     if [[ $osIsRootLoginInput == [Yy] ]]; then
@@ -265,7 +296,7 @@ function setLinuxRootLogin(){
     fi
 
 
-    read -p "是否设置允许root使用密码登陆(上一步请先设置允许root登陆才可以)? 请输入[Y/n]?" osIsRootLoginWithPasswordInput
+    read -p "是否设置允许root使用密码登陆(上一步请先设置允许root登陆才可以)? 请输入[Y/n]:" osIsRootLoginWithPasswordInput
     osIsRootLoginWithPasswordInput=${osIsRootLoginWithPasswordInput:-Y}
 
     if [[ $osIsRootLoginWithPasswordInput == [Yy] ]]; then
@@ -300,7 +331,7 @@ function setLinuxRootLogin(){
 
 # 修改SSH 端口号
 function changeLinuxSSHPort(){
-    green "修改的SSH登陆的端口号, 不要使用常用的端口号. 例如 20|21|23|25|53|69|80|110|443|123!"
+    green " 修改的SSH登陆的端口号, 不要使用常用的端口号. 例如 20|21|23|25|53|69|80|110|443|123!"
     read -p "请输入要修改的端口号(必须是纯数字并且在1024~65535之间或22):" osSSHLoginPortInput
     osSSHLoginPortInput=${osSSHLoginPortInput:-0}
 
@@ -340,12 +371,12 @@ function setLinuxDateZone(){
         yellow "当前时区已经为北京时间  $tempCurrentDateZone | $(date -R) "
     else 
         green " =================================================="
-        yellow "当前时区为: $tempCurrentDateZone | $(date -R) "
-        yellow "是否设置时区为北京时间 +0800区, 以便cron定时重启脚本按照北京时间运行."
+        yellow " 当前时区为: $tempCurrentDateZone | $(date -R) "
+        yellow " 是否设置时区为北京时间 +0800区, 以便cron定时重启脚本按照北京时间运行."
         green " =================================================="
         # read 默认值 https://stackoverflow.com/questions/2642585/read-a-variable-in-bash-with-a-default-value
 
-        read -p "是否设置为北京时间 +0800 时区? 请输入[Y/n]?" osTimezoneInput
+        read -p "是否设置为北京时间 +0800 时区? 请输入[Y/n]:" osTimezoneInput
         osTimezoneInput=${osTimezoneInput:-Y}
 
         if [[ $osTimezoneInput == [Yy] ]]; then
@@ -380,6 +411,24 @@ function installBBR2(){
 }
 
 
+
+function installSoftDownload(){
+	if [[ "${osRelease}" == "debian" || "${osRelease}" == "ubuntu" ]]; then
+		if ! dpkg -l | grep -qw wget; then
+			${osSystemPackage} -y install wget curl git
+			
+			# https://stackoverflow.com/questions/11116704/check-if-vt-x-is-activated-without-having-to-reboot-in-linux
+			${osSystemPackage} -y install cpu-checker
+		fi
+
+	elif [[ "${osRelease}" == "centos" ]]; then
+		if ! rpm -qa | grep -qw wget; then
+			${osSystemPackage} -y install wget curl git
+		fi
+	fi
+
+}
+
 function installPackage(){
     if [ "$osRelease" == "centos" ]; then
        
@@ -394,14 +443,15 @@ enabled=1
 
 EOF
 
-        $osSystemPackage update -y
+        ${osSystemPackage} update -y
 
-        ${sudoCmd}  $osSystemPackage install -y epel-release
+        ${sudoCmd}  ${osSystemPackage} install -y epel-release
 
-        $osSystemPackage install -y curl wget git unzip zip tar
-        $osSystemPackage install -y xz jq redhat-lsb-core 
-        $osSystemPackage install -y iputils-ping
-
+        ${osSystemPackage} install -y curl wget git unzip zip tar
+        ${osSystemPackage} install -y xz jq redhat-lsb-core 
+        ${osSystemPackage} install -y iputils-ping
+        ${osSystemPackage} -y install iperf3
+        
     elif [ "$osRelease" == "ubuntu" ]; then
         
         # https://joshtronic.com/2018/12/17/how-to-install-the-latest-nginx-on-debian-and-ubuntu/
@@ -415,17 +465,17 @@ deb https://nginx.org/packages/ubuntu/ $osReleaseVersionCodeName nginx
 deb-src https://nginx.org/packages/ubuntu/ $osReleaseVersionCodeName nginx
 EOF
 
-        $osSystemPackage update -y
-        ${sudoCmd} $osSystemPackage install -y software-properties-common
-        $osSystemPackage install -y curl wget git unzip zip tar
-        $osSystemPackage install -y xz-utils jq lsb-core lsb-release
-        $osSystemPackage install -y iputils-ping
-
+        ${osSystemPackage} update -y
+        ${sudoCmd} ${osSystemPackage} install -y software-properties-common
+        ${osSystemPackage} install -y curl wget git unzip zip tar
+        ${osSystemPackage} install -y xz-utils jq lsb-core lsb-release
+        ${osSystemPackage} install -y iputils-ping
+        ${osSystemPackage} -y install iperf3
 
     elif [ "$osRelease" == "debian" ]; then
         # ${sudoCmd} add-apt-repository ppa:nginx/stable -y
 
-        $osSystemPackage install -y gnupg2
+        ${osSystemPackage} install -y gnupg2
         wget -O - https://nginx.org/keys/nginx_signing.key | ${sudoCmd} apt-key add -
         # curl -L https://nginx.org/keys/nginx_signing.key | ${sudoCmd} apt-key add -
 
@@ -434,10 +484,11 @@ deb http://nginx.org/packages/debian/ $osReleaseVersionCodeName nginx
 deb-src http://nginx.org/packages/debian/ $osReleaseVersionCodeName nginx
 EOF
         
-        $osSystemPackage update -y
-        $osSystemPackage install -y curl wget git unzip zip tar
-        $osSystemPackage install -y xz-utils jq lsb-core lsb-release
-        $osSystemPackage install -y iputils-ping
+        ${osSystemPackage} update -y
+        ${osSystemPackage} install -y curl wget git unzip zip tar
+        ${osSystemPackage} install -y xz-utils jq lsb-core lsb-release
+        ${osSystemPackage} install -y iputils-ping
+        ${osSystemPackage} -y install iperf3
     fi
 }
 
@@ -502,11 +553,15 @@ function installSoftOhMyZsh(){
     fi
 
     green " =================================================="
-    yellow " ZSH 安装成功, 准备安装 oh-my-zsh"
+    yellow " ZSH 安装成功"
     green " =================================================="
 
     # 安装 oh-my-zsh
     if [[ ! -d "${HOME}/.oh-my-zsh" ]] ;  then
+
+        green " =================================================="
+        yellow " 准备安装 oh-my-zsh"
+        green " =================================================="
         curl -Lo ${HOME}/ohmyzsh_install.sh https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh
         chmod +x ${HOME}/ohmyzsh_install.sh
         sh ${HOME}/ohmyzsh_install.sh --unattended
@@ -587,160 +642,11 @@ function vps_LemonBench(){
 
 
 
-versionWgcf="2.2.2"
-downloadFilenameWgcf="wgcf_${versionWgcf}_linux_amd64"
-configWgcfBinPath="/usr/local/bin"
-configWgcfConfigFilePath="${HOME}/wireguard"
-configWgcfAccountFilePath="$configWgcfConfigFilePath/wgcf-account.toml"
-configWgcfProfileFilePath="$configWgcfConfigFilePath/wgcf-profile.conf"
+
 
 function installWireguard(){
-
-    getTrojanAndV2rayVersion "wgcf"
-    green " =================================================="
-    green "    开始安装 Wireguard 和 Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} !"
-    red "    需要先使用安装BBR脚本 安装原版本BBR, 不能安装bbr plus"
-    red "    Centos 7 推荐安装4.11 内核, 使用本脚本第一项BBR脚本安装原版BBR即可"
-    red "    Debian或Ubuntu 也可以使用 本脚本里的新版BBR安装脚本安装原版BBR, 内核在5.4以上"
-    red "    安装内核有风险, 导致VPS无法启动, 请慎重使用"
-    green " =================================================="
-
-    green "当前Linux kernel devel 内核版本为: $(ls /usr/src/kernels)"
-    green "当前Linux内核版本为: $(uname -r)"
-    echo ""
-    green "安装 Wireguard 需要保证kernel，kernel-devel，kernel-headers 版本一致"
-
-	read -p "是否继续操作? 请先确认linux内核已正确安装 直接回车默认继续操作, 请输入[Y/n]?" isContinueInput
-	isContinueInput=${isContinueInput:-Y}
-
-	if [[ $isContinueInput == [Yy] ]]; then
-		echo ""
-	else 
-        green " 请先用本脚本第一项安装BBR的脚本 安装原版BBR, linux内核更改为4.11 !"
-		exit
-	fi
-
-    mkdir -p ${configWgcfConfigFilePath}
-    mkdir -p ${configWgcfBinPath}
-    cd ${configWgcfConfigFilePath}
-
-    # https://github.com/ViRb3/wgcf/releases/download/v2.2.2/wgcf_2.2.2_linux_amd64
-    wget -O ${configWgcfPath}/wgcf --no-check-certificate "https://github.com/ViRb3/wgcf/releases/download/v${versionWgcf}/${downloadFilenameWgcf}"
-    ${sudoCmd} chmod +x ${configWgcfPath}/wgcf
-
-    if [[ -f ${configWgcfPath}/wgcf ]]; then
-
-        green " Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} 下载成功!"
-
-        # ${configWgcfPath}/wgcf register --config "${configWgcfAccountFilePath}"
-        # ${configWgcfPath}/wgcf generate --config "${configWgcfProfileFilePath}"
-
-        ${configWgcfPath}/wgcf register 
-        ${configWgcfPath}/wgcf generate 
-
-        sed -i '/AllowedIPs = 0\.0\.0\.0/d' ${configWgcfProfileFilePath}
-        sed -i 's/engage\.cloudflareclient\.com/162\.159\.192\.1/g'  ${configWgcfProfileFilePath}
-
-    else
-        ren "  Wgcf ${versionWgcf} 下载失败!"
-        exit
-    fi
-
-    green "  开始安装 Wireguard !"
-    bash <(curl -sSL https://raw.githubusercontent.com/jinwyp/one_click_script/master/wireguard.sh)
-    # wget -O wireguard.sh -N --no-check-certificate "https://raw.githubusercontent.com/teddysun/across/master/wireguard.sh" && chmod 755 wireguard.sh && ./wireguard.sh -r
-
-
-    echo "nameserver 8.8.8.8" >>  /etc/resolv.conf
-    echo "nameserver 8.8.4.4" >>  /etc/resolv.conf
-    echo "nameserver 1.1.1.1" >>  /etc/resolv.conf
-    echo "nameserver 9.9.9.9" >>  /etc/resolv.conf
-    echo "nameserver 9.9.9.10" >>  /etc/resolv.conf
-    echo "nameserver 8.8.8.8" >>  /etc/resolv.conf
-
-
-    cp ${configWgcfProfileFilePath} /etc/wireguard/wgcf.conf 
-
-    echo 
-    green " =================================================="
-    
-    ${sudoCmd} wg-quick up wgcf
-
-    echo 
-    green "  验证 Wireguard 是否启动正常 检测是否使用 CLOUDFLARE 的 ipv6 访问 !"
-    isWireguardIpv6Working=$(curl -6 ip.p3terx.com | grep CLOUDFLARENET )
-    echo
-    echo "curl -6 ip.p3terx.com"
-    curl -6 ip.p3terx.com 
-    echo
-
-	if [[ -n "$isWireguardIpv6Working" ]]; then	
-		green " Wireguard 启动正常! "
-
-        ${sudoCmd} wg-quick down wgcf
-        echo
-	else 
-		green " ================================================== "
-		red " Wireguard 启动失败, 请检查linux 内核安装是否正确, 卸载后重新安装"
-		green " ================================================== "
-		exit
-	fi
-
-
-    ${sudoCmd} systemctl daemon-reload
-
-    # 启用守护进程
-    ${sudoCmd} systemctl start wg-quick@wgcf
-
-    # 设置开机启动
-    ${sudoCmd} systemctl enable wg-quick@wgcf
-
-
-    green " ================================================== "
-    green "  Wireguard 和 Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} 安装成功 !"
-    green "  用本脚本安装v2ray或xray 可以选择是否解除 google 验证码 和 Netflix 的限制 !"
-    green "  其他脚本安装的v2ray或xray 请自行替换 v2ray或xray 配置文件!"
-    green " ================================================== "
-    
+    wget -N --no-check-certificate https://github.com/jinwyp/one_click_script/raw/master/install_kernel.sh && chmod +x install_kernel.sh && ./install_kernel.sh
 }
-
-
-function removeWireguard(){
-    green " ================================================== "
-    red " 准备卸载已安装 Wireguard 和 Cloudflare Warp 命令行工具 Wgcf "
-    green " ================================================== "
-
-    if [ -f "${configWgcfBinPath}/wgcf" ]; then
-        ${sudoCmd} systemctl stop wg-quick@wgcf.service
-        ${sudoCmd} systemctl disable wg-quick@wgcf.service
-    else 
-        red " 系统没有安装 Wireguard 和 Wgcf, 退出卸载"
-        exit
-    fi
-
-    $osSystemPackage -y remove wireguard-dkms
-    $osSystemPackage -y remove wireguard-tools
-
-    rm -rf ${configWgcfConfigFilePath}
-
-    rm -f ${osSystemMdPath}wg-quick@wgcf.service
-
-    rm -f /usr/bin/wg
-    rm -f /usr/bin/wg-quick
-    rm -f /usr/share/man/man8/wg.8
-    rm -f /usr/share/man/man8/wg-quick.8
-
-    [ -d "/etc/wireguard" ] && ("rm -rf /etc/wireguard")
-
-    modprobe -r wireguard
-
-    green " ================================================== "
-    green "  Wireguard 和 Cloudflare Warp 命令行工具 Wgcf 卸载完毕 !"
-    green " ================================================== "
-
-  
-}
-
 
 
 
@@ -751,6 +657,7 @@ configNetworkRealIp=""
 configNetworkLocalIp=""
 configSSLDomain=""
 
+configSSLAcmeScriptPath="${HOME}/.acme.sh"
 configSSLCertPath="${HOME}/website/cert"
 configWebsitePath="${HOME}/website/html"
 configTrojanWindowsCliPrefixPath=$(cat /dev/urandom | head -1 | md5sum | head -c 20)
@@ -933,7 +840,7 @@ function isTrojanGoInstall(){
 function compareRealIpWithLocalIp(){
 
     yellow " 是否检测域名指向的IP正确 (默认检测，如果域名指向的IP不是本机器IP则无法继续. 如果已开启CDN不方便关闭可以选择否)"
-    read -p "是否检测域名指向的IP正确? 请输入[Y/n]?" isDomainValidInput
+    read -p "是否检测域名指向的IP正确? 请输入[Y/n]:" isDomainValidInput
     isDomainValidInput=${isDomainValidInput:-Y}
 
     if [[ $isDomainValidInput == [Yy] ]]; then
@@ -984,21 +891,23 @@ function getHTTPSCertificate(){
 
 	if [[ $1 == "standalone" ]] ; then
 	    green "  开始重新申请证书 acme.sh standalone mode !"
-	    ~/.acme.sh/acme.sh  --issue  -d ${configSSLDomain}  --standalone
+	    ${configSSLAcmeScriptPath}/acme.sh  --issue  -d ${configSSLDomain}  --standalone
 
-        ~/.acme.sh/acme.sh  --installcert  -d ${configSSLDomain}   \
+        ${configSSLAcmeScriptPath}/acme.sh  --installcert  -d ${configSSLDomain}   \
         --key-file   ${configSSLCertPath}/private.key \
         --fullchain-file ${configSSLCertPath}/fullchain.cer
 
 	else
 	    green "  开始第一次申请证书 acme.sh nginx mode !"
-        ~/.acme.sh/acme.sh  --issue  -d ${configSSLDomain}  --webroot ${configWebsitePath}/
+        ${configSSLAcmeScriptPath}/acme.sh  --issue  -d ${configSSLDomain}  --webroot ${configWebsitePath}/
 
-        ~/.acme.sh/acme.sh  --installcert  -d ${configSSLDomain}   \
+        ${configSSLAcmeScriptPath}/acme.sh  --installcert  -d ${configSSLDomain}   \
         --key-file   ${configSSLCertPath}/private.key \
         --fullchain-file ${configSSLCertPath}/fullchain.cer \
         --reloadcmd  "systemctl force-reload  nginx.service"
     fi
+
+    green "=========================================="
 }
 
 
@@ -1268,8 +1177,8 @@ function removeNginx(){
     rm -f ${configReadme}
 
     rm -rf "/etc/nginx"
-    ${sudoCmd} bash /root/.acme.sh/acme.sh --uninstall
-    uninstall /root/.acme.sh
+    ${sudoCmd} bash ${configSSLAcmeScriptPath}/acme.sh --uninstall
+    uninstall ${configSSLAcmeScriptPath}
     rm -rf ${configDownloadTempPath}
 
     green " ================================================== "
@@ -1830,7 +1739,8 @@ EOF
 	yellow "密码8: ${trojanPassword8}"
 	yellow "密码9: ${trojanPassword9}"
 	yellow "密码10: ${trojanPassword10}"
-	yellow "您指定前缀的密码若干: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202099 都可以使用"
+	yellow "您指定前缀的密码共90个: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202099 都可以使用"
+	yellow "例如: 密码:${configTrojanPasswordPrefixInput}202011 或 密码:${configTrojanPasswordPrefixInput}202088 都可以使用"
 
     if [[ ${isTrojanGoSupportWebsocket} == "true" ]]; then
         yellow "Websocket path 路径为: /${configTrojanGoWebSocketPath}"
@@ -1896,7 +1806,8 @@ Trojan${promptInfoTrojanName}服务器地址: ${configSSLDomain}  端口: $confi
 密码8: ${trojanPassword8}
 密码9: ${trojanPassword9}
 密码10: ${trojanPassword10}
-您指定前缀的密码若干: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202099 都可以使用
+您指定前缀的密码共90个: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202099 都可以使用
+例如: 密码:${configTrojanPasswordPrefixInput}202011 或 密码:${configTrojanPasswordPrefixInput}202088 都可以使用
 
 如果是trojan-go开启了Websocket，那么Websocket path 路径为: /${configTrojanGoWebSocketPath}
 
@@ -1982,7 +1893,7 @@ function installV2ray(){
 
     if [ -f "${configV2rayPath}/v2ray" ] || [ -f "/usr/local/bin/v2ray" ] || [ -f "/usr/bin/v2ray" ]; then
         green " =================================================="
-        green "  已安装过 V2ray 或 Xray, 退出安装 !"
+        green "     已安装过 V2ray 或 Xray, 退出安装 !"
         green " =================================================="
         exit
     fi
@@ -1992,7 +1903,7 @@ function installV2ray(){
         promptInfoXrayName="xray"
         isXray="yes"
     else
-        read -p "是否使用Xray内核(默认为V2ray内核 )? 请输入[y/N]?" isV2rayOrXrayInput
+        read -p "是否使用Xray内核(默认为V2ray内核 )? 请输入[y/N]:" isV2rayOrXrayInput
         isV2rayOrXrayInput=${isV2rayOrXrayInput:-n}
 
         if [[ $isV2rayOrXrayInput == [Yy] ]]; then
@@ -2006,7 +1917,7 @@ function installV2ray(){
          configV2rayProtocol="vless"
     else 
 
-        read -p "是否使用VLESS协议(默认为VMess协议 )? 请输入[y/N]?" isV2rayUseVLessInput
+        read -p "是否使用VLESS协议(默认为VMess协议 )? 请输入[y/N]:" isV2rayUseVLessInput
         isV2rayUseVLessInput=${isV2rayUseVLessInput:-n}
 
         if [[ $isV2rayUseVLessInput == [Yy] ]]; then
@@ -2020,7 +1931,7 @@ function installV2ray(){
 
 
 
-    read -p "是否使用IPV6 解锁Google 验证码 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]?" isV2rayUnlockGoogleInput
+    read -p "是否使用IPV6 解锁Google 验证码 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]:" isV2rayUnlockGoogleInput
     isV2rayUnlockGoogleInput=${isV2rayUnlockGoogleInput:-n}
 
     V2rayUnlockText=""
@@ -2030,7 +1941,7 @@ function installV2ray(){
     fi
 
 
-    read -p "是否使用IPV6 解锁Netflix 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]?" isV2rayUnlockNetflixInput
+    read -p "是否使用IPV6 解锁Netflix 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]:" isV2rayUnlockNetflixInput
     isV2rayUnlockNetflixInput=${isV2rayUnlockNetflixInput:-n}
     
     if [[ $isV2rayUnlockNetflixInput == [Yy] ]]; then
@@ -2414,23 +2325,7 @@ EOM
 EOM
 
 
-    if [[ $isV2rayUnlockGoogleInput == [Nn] && $isV2rayUnlockNetflixInput == [Nn] ]]; then
-        
-        read -r -d '' v2rayConfigOutboundInput << EOM
-    "outbounds": [
-        {
-            "tag": "direct",
-            "protocol": "freedom",
-            "settings": {}
-        },
-        {
-            "tag": "blocked",
-            "protocol": "blackhole",
-            "settings": {}
-        }
-    ]
-EOM
-    else
+    if [[ $isV2rayUnlockGoogleInput == [Yy] || $isV2rayUnlockNetflixInput == [Yy] ]]; then
 
         read -r -d '' v2rayConfigOutboundInput << EOM
     "outbounds": [
@@ -2461,6 +2356,22 @@ EOM
             }
         ]
     }
+EOM
+
+    else
+        read -r -d '' v2rayConfigOutboundInput << EOM
+    "outbounds": [
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {}
+        },
+        {
+            "tag": "blocked",
+            "protocol": "blackhole",
+            "settings": {}
+        }
+    ]
 EOM
         
     fi
@@ -3392,7 +3303,7 @@ EOF
         # 命令补全环境变量
         echo "export PATH=$PATH:${configTrojanWebPath}" >> ${HOME}/.${osSystemShell}rc
 
-        # (crontab -l ; echo '25 0 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" > /dev/null') | sort - | uniq - | crontab -
+        # (crontab -l ; echo '25 0 * * * "${configSSLAcmeScriptPath}"/acme.sh --cron --home "${configSSLAcmeScriptPath}" > /dev/null') | sort - | uniq - | crontab -
         (crontab -l ; echo "30 4 * * 0,1,2,3,4,5,6 systemctl restart trojan-web.service") | sort - | uniq - | crontab -
 
     else
@@ -3525,7 +3436,7 @@ function getHTTPSNoNgix(){
 
     read configSSLDomain
 
-    read -p "是否申请证书? 默认为自动申请证书,如果二次安装或已有证书可以选否 请输入[Y/n]?" isDomainSSLRequestInput
+    read -p "是否申请证书? 默认为自动申请证书,如果二次安装或已有证书可以选否 请输入[Y/n]:" isDomainSSLRequestInput
     isDomainSSLRequestInput=${isDomainSSLRequestInput:-Y}
 
     isInstallNginx="false"
@@ -3586,6 +3497,26 @@ function getHTTPSNoNgix(){
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function startMenuOther(){
     clear
     green " =================================================="
@@ -3635,9 +3566,8 @@ function startMenuOther(){
     green " 36. ZBench 综合网速测试 （包含节点测速, Ping 以及 路由测试）"
 
     echo
-    green " 41. 安装新版本 BBR-PLUS 加速6合一脚本" 
-    green " 42. 安装 WireGuard, 用于解锁 google 验证码 和 Netflix 限制" 
-    green " 43. 卸载 WireGuard" 
+    green " 41. 安装 BBR-PLUS 加速4合一脚本 by chiakge" 
+    green " 42. 安装新版本 BBR-PLUS 加速6合一脚本 by ylx2016" 
     echo
     green " 9. 返回上级菜单"
     green " 0. 退出脚本"
@@ -3751,14 +3681,11 @@ function startMenuOther(){
             vps_zbench
         ;;        
         41 )
-            installBBR2
-        ;; 
+            installBBR
+        ;;
         42 )
-            installWireguard
-        ;;   
-        43 )
-            removeWireguard
-        ;;                       
+            installBBR2
+        ;;                              
         9)
             start_menu
         ;;
@@ -3780,19 +3707,29 @@ function startMenuOther(){
 
 
 
+
+
+
+
+
+
+
+
+
+
 function start_menu(){
     clear
 
     if [[ $1 == "first" ]] ; then
         getLinuxOSRelease
-        ${osSystemPackage} -y install wget curl git 
+        installSoftDownload
     fi
 
-    green " =================================================="
-    green " Trojan Trojan-go V2ray 一键安装脚本 2021-03-12 更新.  系统支持：centos7+ / debian9+ / ubuntu16.04+"
+    green " ===================================================================================================="
+    green " Trojan Trojan-go V2ray 一键安装脚本 | 2021-04-15 | By jinwyp | 系统支持：centos7+ / debian9+ / ubuntu16.04+"
     red " *请不要在任何生产环境使用此脚本 请不要有其他程序占用80和443端口"
-    green " =================================================="
-    green " 1. 安装 BBR-PLUS 加速4合一脚本"
+    green " ===================================================================================================="
+    green " 1. 安装 linux 内核 BBR-PLUS, 安装 WireGuard, 用于解锁 google 验证码 和 Netflix 限制"
     echo
     green " 2. 安装 trojan 和 nginx 不支持CDN"
     green " 3. 修复证书 并继续安装 trojan"
@@ -3819,7 +3756,7 @@ function start_menu(){
     red " 21. 卸载 trojan-go, v2ray或xray 和 nginx"
     echo
     green " 28. 查看已安装的配置和用户密码等信息"
-    green " 29. 子菜单 安装 trojan 和 v2ray 可视化管理面板"
+    green " 29. 子菜单 安装 trojan 和 v2ray 可视化管理面板, 测网速工具, Netflix 测试工具"
     green " 30. 不安装nginx,只安装trojan或v2ray或xray,可选安装SSL证书, 方便与现有网站或宝塔面板集成"
     green " =================================================="
     green " 31. 安装OhMyZsh与插件zsh-autosuggestions, Micro编辑器 等软件"
@@ -3827,13 +3764,12 @@ function start_menu(){
     green " 33. 修改SSH 登陆端口号"
     green " 34. 设置时区为北京时间"
     green " 35. 用 VI 编辑 authorized_keys 文件, 方便填入公钥, 免密码登录, 增加安全性"
-    green " 41. 子菜单 测网速工具, Netflix 测试工具, 解锁Netflix和去除google验证码工具"
     green " 0. 退出脚本"
     echo
     read -p "请输入数字:" menuNumberInput
     case "$menuNumberInput" in
         1 )
-            installBBR
+            installWireguard
         ;;
         2 )
             installTrojanWholeProcess
@@ -3948,21 +3884,21 @@ function start_menu(){
         ;;
         35 )
             editLinuxLoginWithPublicKey
-        ;;        
+        ;;                 
         29 )
             startMenuOther
         ;;
         30 )
             startMenuOther
         ;;        
-        41 )
-            startMenuOther
+        86 )
+            installBBR
         ;;
-        89 )
-            installPackage
-        ;;
-        88 )
+        87 )
             installBBR2
+        ;;        
+        88 )
+            installPackage
         ;;
         99 )
             getTrojanAndV2rayVersion "trojan"
