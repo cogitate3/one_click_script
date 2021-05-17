@@ -222,47 +222,42 @@ function testLinuxPortUsage(){
     fi
 
     if [ "$osRelease" == "centos" ]; then
-        if  [ -n "$(grep ' 6\.' /etc/redhat-release)" ] ; then
-            red "==============="
-            red "当前系统不受支持"
-            red "==============="
+        if  [[ ${osReleaseVersionNo} == "6" || ${osReleaseVersionNo} == "5" ]]; then
+            green " =================================================="
+            red " 本脚本不支持 Centos 6 或 Centos 6 更早的版本"
+            green " =================================================="
             exit
         fi
 
-        if  [ -n "$(grep ' 5\.' /etc/redhat-release)" ] ; then
-            red "==============="
-            red "当前系统不受支持"
-            red "==============="
-            exit
-        fi
-
+        red " 关闭防火墙 firewalld"
         ${sudoCmd} systemctl stop firewalld
         ${sudoCmd} systemctl disable firewalld
 
     elif [ "$osRelease" == "ubuntu" ]; then
-        if  [ -n "$(grep ' 14\.' /etc/os-release)" ] ;then
-            red "==============="
-            red "当前系统不受支持"
-            red "==============="
-            exit
-        fi
-        if  [ -n "$(grep ' 12\.' /etc/os-release)" ] ;then
-            red "==============="
-            red "当前系统不受支持"
-            red "==============="
+        if  [[ ${osReleaseVersionNo} == "14" || ${osReleaseVersionNo} == "12" ]]; then
+            green " =================================================="
+            red " 本脚本不支持 Ubuntu 14 或 Ubuntu 14 更早的版本"
+            green " =================================================="
             exit
         fi
 
+        red " 关闭防火墙 ufw"
         ${sudoCmd} systemctl stop ufw
         ${sudoCmd} systemctl disable ufw
         
-    
     elif [ "$osRelease" == "debian" ]; then
         $osSystemPackage update -y
-
     fi
 
 }
+
+
+
+
+
+
+
+
 
 
 # 编辑 SSH 公钥 文件用于 免密码登录
@@ -329,6 +324,7 @@ function setLinuxRootLogin(){
 
 }
 
+
 # 修改SSH 端口号
 function changeLinuxSSHPort(){
     green " 修改的SSH登陆的端口号, 不要使用常用的端口号. 例如 20|21|23|25|53|69|80|110|443|123!"
@@ -339,13 +335,20 @@ function changeLinuxSSHPort(){
         sed -i "s/#\?Port [0-9]*/Port $osSSHLoginPortInput/g" /etc/ssh/sshd_config
 
         if [ "$osRelease" == "centos" ] ; then
-            yum -y install policycoreutils-python
 
+            if  [[ ${osReleaseVersionNo} == "7" ]]; then
+                yum -y install policycoreutils-python
+            elif  [[ ${osReleaseVersionNo} == "8" ]]; then
+                yum -y install policycoreutils-python-utils
+            fi
+
+            # semanage port -l
             semanage port -a -t ssh_port_t -p tcp $osSSHLoginPortInput
             firewall-cmd --permanent --zone=public --add-port=$osSSHLoginPortInput/tcp 
             firewall-cmd --reload
-            ${sudoCmd} service sshd restart
-            ${sudoCmd} systemctl restart sshd
+    
+            ${sudoCmd} systemctl restart sshd.service
+
         fi
 
         if [ "$osRelease" == "ubuntu" ] || [ "$osRelease" == "debian" ] ; then
@@ -394,23 +397,19 @@ function setLinuxDateZone(){
 
 
 
+
+# 更新本脚本
+function upgradeScript(){
+    wget -Nq --no-check-certificate -O ./trojan_v2ray_install.sh "https://raw.githubusercontent.com/jinwyp/one_click_script/master/trojan_v2ray_install.sh"
+    green " 本脚本升级成功! "
+    chmod +x ./trojan_v2ray_install.sh
+    sleep 2s
+    exec "./trojan_v2ray_install.sh"
+}
+
+
+
 # 软件安装
-
-
-
-function installBBR(){
-    wget -O tcp_old.sh -N --no-check-certificate "https://raw.githubusercontent.com/chiakge/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp_old.sh && ./tcp_old.sh
-}
-
-function installBBR2(){
-    
-    if [[ -f ./tcp.sh ]];  then
-        mv ./tcp.sh ./tcp_old.sh
-    fi    
-    wget -N --no-check-certificate "https://raw.githubusercontent.com/ylx2016/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp.sh && ./tcp.sh
-}
-
-
 
 function installSoftDownload(){
 	if [[ "${osRelease}" == "debian" || "${osRelease}" == "ubuntu" ]]; then
@@ -425,8 +424,7 @@ function installSoftDownload(){
 		if ! rpm -qa | grep -qw wget; then
 			${osSystemPackage} -y install wget curl git
 		fi
-	fi
-
+	fi 
 }
 
 function installPackage(){
@@ -442,16 +440,25 @@ gpgcheck=0
 enabled=1
 
 EOF
+        if ! rpm -qa | grep -qw iperf3; then
+			${sudoCmd} ${osSystemPackage} install -y epel-release
+
+            ${osSystemPackage} install -y curl wget git unzip zip tar
+            ${osSystemPackage} install -y xz jq redhat-lsb-core 
+            ${osSystemPackage} install -y iputils
+            ${osSystemPackage} install -y iperf3
+		fi
 
         ${osSystemPackage} update -y
 
-        ${sudoCmd}  ${osSystemPackage} install -y epel-release
 
-        ${osSystemPackage} install -y curl wget git unzip zip tar
-        ${osSystemPackage} install -y xz jq redhat-lsb-core 
-        ${osSystemPackage} install -y iputils-ping
-        ${osSystemPackage} -y install iperf3
-        
+        # https://www.cyberciti.biz/faq/how-to-install-and-use-nginx-on-centos-8/
+        if  [[ ${osReleaseVersionNo} == "8" ]]; then
+            ${sudoCmd} yum module -y reset nginx
+            ${sudoCmd} yum module -y enable nginx:1.18
+            ${sudoCmd} yum module list nginx
+        fi
+
     elif [ "$osRelease" == "ubuntu" ]; then
         
         # https://joshtronic.com/2018/12/17/how-to-install-the-latest-nginx-on-debian-and-ubuntu/
@@ -466,11 +473,14 @@ deb-src https://nginx.org/packages/ubuntu/ $osReleaseVersionCodeName nginx
 EOF
 
         ${osSystemPackage} update -y
-        ${sudoCmd} ${osSystemPackage} install -y software-properties-common
-        ${osSystemPackage} install -y curl wget git unzip zip tar
-        ${osSystemPackage} install -y xz-utils jq lsb-core lsb-release
-        ${osSystemPackage} install -y iputils-ping
-        ${osSystemPackage} -y install iperf3
+
+        if ! dpkg -l | grep -qw iperf3; then
+            ${sudoCmd} ${osSystemPackage} install -y software-properties-common
+            ${osSystemPackage} install -y curl wget git unzip zip tar
+            ${osSystemPackage} install -y xz-utils jq lsb-core lsb-release
+            ${osSystemPackage} install -y iputils-ping
+            ${osSystemPackage} install -y iperf3
+		fi    
 
     elif [ "$osRelease" == "debian" ]; then
         # ${sudoCmd} add-apt-repository ppa:nginx/stable -y
@@ -485,10 +495,13 @@ deb-src http://nginx.org/packages/debian/ $osReleaseVersionCodeName nginx
 EOF
         
         ${osSystemPackage} update -y
-        ${osSystemPackage} install -y curl wget git unzip zip tar
-        ${osSystemPackage} install -y xz-utils jq lsb-core lsb-release
-        ${osSystemPackage} install -y iputils-ping
-        ${osSystemPackage} -y install iperf3
+
+        if ! dpkg -l | grep -qw iperf3; then
+            ${osSystemPackage} install -y curl wget git unzip zip tar
+            ${osSystemPackage} install -y xz-utils jq lsb-core lsb-release
+            ${osSystemPackage} install -y iputils-ping
+            ${osSystemPackage} install -y iperf3
+        fi        
     fi
 }
 
@@ -503,7 +516,7 @@ function installSoftEditor(){
         cp ${HOME}/bin/micro /usr/local/bin
 
         green " =================================================="
-        yellow " micro 编辑器 安装成功!"
+        green " micro 编辑器 安装成功!"
         green " =================================================="
     fi
 
@@ -553,7 +566,7 @@ function installSoftOhMyZsh(){
     fi
 
     green " =================================================="
-    yellow " ZSH 安装成功"
+    green " ZSH 安装成功"
     green " =================================================="
 
     # 安装 oh-my-zsh
@@ -611,7 +624,7 @@ function vps_netflix(){
     # bash <(curl -sSL "https://github.com/CoiaPrant/Netflix_Unlock_Information/raw/main/netflix.sh")
 	# wget -N --no-check-certificate https://github.com/CoiaPrant/Netflix_Unlock_Information/raw/main/netflix.sh && chmod +x netflix.sh && ./netflix.sh
 
-	wget -O netflix.sh -N --no-check-certificate https://github.com/CoiaPrant/MediaUnlock_Test/raw/main/check.sh && chmod +x netflix.sh && ./netflix.sh
+	wget -N --no-check-certificate -O ./netflix.sh https://github.com/CoiaPrant/MediaUnlock_Test/raw/main/check.sh && chmod +x ./netflix.sh && ./netflix.sh
 
     # wget -N -O nf https://github.com/sjlleo/netflix-verify/releases/download/2.01/nf_2.01_linux_amd64 && chmod +x nf && clear && ./nf
 }
@@ -641,12 +654,85 @@ function vps_LemonBench(){
 
 
 
+function installBBR(){
+    wget -O tcp_old.sh -N --no-check-certificate "https://raw.githubusercontent.com/chiakge/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp_old.sh && ./tcp_old.sh
+}
+
+function installBBR2(){
+    
+    if [[ -f ./tcp.sh ]];  then
+        mv ./tcp.sh ./tcp_old.sh
+    fi    
+    wget -N --no-check-certificate "https://raw.githubusercontent.com/ylx2016/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp.sh && ./tcp.sh
+}
 
 
 
 function installWireguard(){
-    wget -N --no-check-certificate https://github.com/jinwyp/one_click_script/raw/master/install_kernel.sh && chmod +x install_kernel.sh && ./install_kernel.sh
+    bash <(wget -qO- https://github.com/jinwyp/one_click_script/raw/master/install_kernel.sh)
+    # wget -N --no-check-certificate https://github.com/jinwyp/one_click_script/raw/master/install_kernel.sh && chmod +x ./install_kernel.sh && ./install_kernel.sh
 }
+
+
+function installBTPanel(){
+    if [ "$osRelease" == "centos" ]; then
+        yum install -y wget && wget -O install.sh http://download.bt.cn/install/install_6.0.sh && sh install.sh
+    else
+        curl -sSO http://download.bt.cn/install/install_panel.sh && bash install_panel.sh
+
+    fi
+}
+
+function installBTPanelCrack(){
+    if [ "$osRelease" == "centos" ]; then
+        yum install -y wget && wget -O install.sh https://download.fenhao.me/install/install_6.0.sh && sh install.sh
+    else
+        curl -sSO https://download.fenhao.me/install/install_panel.sh && bash install_panel.sh
+    fi
+}
+
+function installBTPanelCrack2(){
+    if [ "$osRelease" == "centos" ]; then
+        yum install -y wget && wget -O install.sh http://download.hostcli.com/install/install_6.0.sh && sh install.sh
+    else
+        exit
+    fi
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -658,12 +744,15 @@ configNetworkLocalIp=""
 configSSLDomain=""
 
 configSSLAcmeScriptPath="${HOME}/.acme.sh"
+configWebsiteFatherPath="${HOME}/website"
+configSSLCertBakPath="${HOME}/sslbackup"
 configSSLCertPath="${HOME}/website/cert"
 configWebsitePath="${HOME}/website/html"
 configTrojanWindowsCliPrefixPath=$(cat /dev/urandom | head -1 | md5sum | head -c 20)
 configWebsiteDownloadPath="${configWebsitePath}/download/${configTrojanWindowsCliPrefixPath}"
 configDownloadTempPath="${HOME}/temp"
 
+configRanPath="${HOME}/ran"
 
 
 versionTrojan="1.16.0"
@@ -713,9 +802,10 @@ isXray="no"
 
 configV2rayWebSocketPath=$(cat /dev/urandom | head -1 | md5sum | head -c 8)
 configV2rayPort="$(($RANDOM + 10000))"
+configV2rayVmesWSPort="$(($RANDOM + 10000))"
 configV2rayVmessTCPPort="$(($RANDOM + 10000))"
 configV2rayPortShowInfo=$configV2rayPort
-configV2rayIsTlsShowInfo="none"
+configV2rayIsTlsShowInfo="tls"
 configV2rayTrojanPort="$(($RANDOM + 10000))"
 
 configV2rayPath="${HOME}/v2ray"
@@ -723,7 +813,7 @@ configV2rayAccessLogFilePath="${HOME}/v2ray-access.log"
 configV2rayErrorLogFilePath="${HOME}/v2ray-error.log"
 configV2rayProtocol="vmess"
 configV2rayVlessMode=""
-configReadme=${HOME}/trojan_v2ray_readme.txt
+configReadme=${HOME}/readme_trojan_v2ray.txt
 
 
 function downloadAndUnzip(){
@@ -838,8 +928,9 @@ function isTrojanGoInstall(){
 
 
 function compareRealIpWithLocalIp(){
-
-    yellow " 是否检测域名指向的IP正确 (默认检测，如果域名指向的IP不是本机器IP则无法继续. 如果已开启CDN不方便关闭可以选择否)"
+    echo
+    echo
+    green " 是否检测域名指向的IP正确 (默认检测，如果域名指向的IP不是本机器IP则无法继续. 如果已开启CDN不方便关闭可以选择否)"
     read -p "是否检测域名指向的IP正确? 请输入[Y/n]:" isDomainValidInput
     isDomainValidInput=${isDomainValidInput:-Y}
 
@@ -887,27 +978,72 @@ function getHTTPSCertificate(){
 	mkdir -p ${configWebsitePath}
 	curl https://get.acme.sh | sh
 
-    green "=========================================="
+    green " ================================================== "
 
 	if [[ $1 == "standalone" ]] ; then
-	    green "  开始重新申请证书 acme.sh standalone mode !"
-	    ${configSSLAcmeScriptPath}/acme.sh  --issue  -d ${configSSLDomain}  --standalone
+	    green "  开始申请证书, acme.sh 通过 standalone mode 申请 "
+        echo
 
-        ${configSSLAcmeScriptPath}/acme.sh  --installcert  -d ${configSSLDomain}   \
-        --key-file   ${configSSLCertPath}/private.key \
-        --fullchain-file ${configSSLCertPath}/fullchain.cer
+	    ${configSSLAcmeScriptPath}/acme.sh --issue --standalone -d ${configSSLDomain}  
+        echo
+
+        ${configSSLAcmeScriptPath}/acme.sh --installcert  -d ${configSSLDomain} \
+        --key-file ${configSSLCertPath}/private.key \
+        --fullchain-file ${configSSLCertPath}/fullchain.cer \
+        --reloadcmd "systemctl restart nginx.service"
 
 	else
-	    green "  开始第一次申请证书 acme.sh nginx mode !"
-        ${configSSLAcmeScriptPath}/acme.sh  --issue  -d ${configSSLDomain}  --webroot ${configWebsitePath}/
+        # https://github.com/m3ng9i/ran/issues/10
 
-        ${configSSLAcmeScriptPath}/acme.sh  --installcert  -d ${configSSLDomain}   \
-        --key-file   ${configSSLCertPath}/private.key \
+        mkdir -p ${configRanPath}
+        
+        if [[ -f "${configRanPath}/ran_linux_amd64" ]]; then
+            echo
+        else
+
+            downloadAndUnzip "https://github.com/m3ng9i/ran/releases/download/v0.1.5/ran_linux_amd64.zip" "${configRanPath}" "ran_linux_amd64.zip" 
+            chmod +x ${configRanPath}/ran_linux_amd64
+            
+        fi    
+
+        echo
+        echo "nohup ${configRanPath}/ran_linux_amd64 -l=false -g=false -sa=true -p=80 -r=${configWebsitePath} >/dev/null 2>&1 &"
+        nohup ${configRanPath}/ran_linux_amd64 -l=false -g=false -sa=true -p=80 -r=${configWebsitePath} >/dev/null 2>&1 &
+        echo
+	    green "  开始申请证书, acme.sh 通过 webroot mode 申请 "
+        echo
+        echo
+        green "默认通过Letsencrypt.org来申请证书, 如果证书申请失败, 例如一天内通过Letsencrypt.org申请次数过多, 可以选否通过BuyPass.com来申请."
+        read -p "是否通过Letsencrypt.org来申请证书? 默认直接回车为是, 选否则通过BuyPass.com来申请, 请输入[Y/n]:" isDomainSSLFromLetInput
+        isDomainSSLFromLetInput=${isDomainSSLFromLetInput:-Y}
+
+        echo
+        if [[ $isDomainSSLFromLetInput == [Yy] ]]; then
+            ${configSSLAcmeScriptPath}/acme.sh --issue -d ${configSSLDomain} --webroot ${configWebsitePath}
+            
+        else
+            read -p "请输入邮箱地址, 用于BuyPass.com申请证书:" isDomainSSLFromBuyPassEmailInput
+            isDomainSSLFromBuyPassEmailInput=${isDomainSSLFromBuyPassEmailInput:-test@gmail.com}
+
+            echo
+            ${configSSLAcmeScriptPath}/acme.sh --server https://api.buypass.com/acme/directory --register-account  --accountemail ${isDomainSSLFromBuyPassEmailInput}
+            
+            echo
+            ${configSSLAcmeScriptPath}/acme.sh --server https://api.buypass.com/acme/directory --days 170 --issue -d ${configSSLDomain} --webroot ${configWebsitePath}
+         
+        fi
+        
+        echo
+        ${configSSLAcmeScriptPath}/acme.sh --installcert -d ${configSSLDomain} \
+        --key-file ${configSSLCertPath}/private.key \
         --fullchain-file ${configSSLCertPath}/fullchain.cer \
-        --reloadcmd  "systemctl force-reload  nginx.service"
+        --reloadcmd "systemctl restart nginx.service"
+
+        sleep 4
+        ps -C ran_linux_amd64 -o pid= | xargs -I {} kill {}
     fi
 
-    green "=========================================="
+    green " ================================================== "
 }
 
 
@@ -926,7 +1062,7 @@ function installWebServerNginx(){
     fi
 
     stopServiceV2ray
-
+    
     ${osSystemPackage} install nginx -y
     ${sudoCmd} systemctl enable nginx.service
     ${sudoCmd} systemctl stop nginx.service
@@ -948,11 +1084,12 @@ http {
                       '"\$http_referer" "\$http_user_agent" "\$http_x_forwarded_for"';
     access_log  $nginxAccessLogFilePath  main;
     error_log $nginxErrorLogFilePath;
+
     sendfile        on;
     #tcp_nopush     on;
     keepalive_timeout  120;
     client_max_body_size 20m;
-    #gzip  on;
+    gzip  on;
 
     server {
         listen       80;
@@ -992,11 +1129,12 @@ http {
                       '"\$http_referer" "\$http_user_agent" "\$http_x_forwarded_for"';
     access_log  $nginxAccessLogFilePath  main;
     error_log $nginxErrorLogFilePath;
+
     sendfile        on;
     #tcp_nopush     on;
     keepalive_timeout  120;
     client_max_body_size 20m;
-    #gzip  on;
+    #gzip on;
 
     server {
         listen       80;
@@ -1004,21 +1142,13 @@ http {
         root $configWebsitePath;
         index index.php index.html index.htm;
 
-        location /$configV2rayWebSocketPath {
-            proxy_pass http://127.0.0.1:$configV2rayPort;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade \$http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host \$http_host;
-        }
-
         location /$configTrojanWebNginxPath {
             proxy_pass http://127.0.0.1:$configTrojanWebPort/;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Host \$http_host;
         }
 
-        location ~* ^/(js|css|vendor|common|auth|trojan)/ {
+        location ~* ^/(static|common|auth|trojan)/ {
             proxy_pass  http://127.0.0.1:$configTrojanWebPort;
             proxy_http_version 1.1;
             proxy_set_header Upgrade \$http_upgrade;
@@ -1050,11 +1180,12 @@ http {
                       '"\$http_referer" "\$http_user_agent" "\$http_x_forwarded_for"';
     access_log  $nginxAccessLogFilePath  main;
     error_log $nginxErrorLogFilePath;
+
     sendfile        on;
     #tcp_nopush     on;
     keepalive_timeout  120;
     client_max_body_size 20m;
-    #gzip  on;
+    gzip  on;
 
     server {
         listen 443 ssl http2;
@@ -1065,7 +1196,6 @@ http {
         ssl_certificate_key   ${configSSLCertPath}/private.key;
         ssl_protocols         TLSv1.2 TLSv1.3;
         ssl_ciphers           TLS-AES-256-GCM-SHA384:TLS-CHACHA20-POLY1305-SHA256:TLS-AES-128-GCM-SHA256:TLS-AES-128-CCM-8-SHA256:TLS-AES-128-CCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256;
-
 
         # Config for 0-RTT in TLSv1.3
         ssl_early_data on;
@@ -1104,10 +1234,15 @@ EOF
     mkdir -p ${configWebsiteDownloadPath}
 
     downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/website.zip" "${configWebsitePath}" "website.zip"
-    downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/trojan_client_all.zip" "${configWebsiteDownloadPath}" "trojan_client_all.zip"
-    #downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/trojan-qt5.zip" "${configWebsiteDownloadPath}" "trojan-qt5.zip"
-    
-    downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/v2ray_client_all.zip" "${configWebsiteDownloadPath}" "v2ray_client_all.zip"
+
+    wget -P "${configWebsiteDownloadPath}" "https://github.com/jinwyp/one_click_script/raw/master/download/trojan-mac.zip"
+    wget -P "${configWebsiteDownloadPath}" "https://github.com/jinwyp/one_click_script/raw/master/download/v2ray-windows.zip" 
+    wget -P "${configWebsiteDownloadPath}" "https://github.com/jinwyp/one_click_script/raw/master/download/v2ray-mac.zip"
+
+    # downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/trojan_client_all.zip" "${configWebsiteDownloadPath}" "trojan_client_all.zip"
+    # downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/trojan-qt5.zip" "${configWebsiteDownloadPath}" "trojan-qt5.zip"
+    # downloadAndUnzip "https://github.com/jinwyp/one_click_script/raw/master/download/v2ray_client_all.zip" "${configWebsiteDownloadPath}" "v2ray_client_all.zip"
+
     #wget -P "${configWebsiteDownloadPath}" "https://github.com/jinwyp/one_click_script/raw/master/download/v2ray-android.zip"
 
     ${sudoCmd} systemctl start nginx.service
@@ -1126,28 +1261,38 @@ EOF
 	fi
 
     green "    伪装站点的静态html内容放置在目录 ${configWebsitePath}, 可自行更换网站内容!"
-	green "    nginx 配置路径 ${nginxConfigPath} "
+	red "    nginx 配置路径 ${nginxConfigPath} "
 	green "    nginx 访问日志 ${nginxAccessLogFilePath} "
 	green "    nginx 错误日志 ${nginxErrorLogFilePath} "
-	green "    nginx 停止命令: systemctl stop nginx.service  启动命令: systemctl start nginx.service  重启命令: systemctl restart nginx.service"
+    green "    nginx 查看日志命令: journalctl -n 50 -u nginx.service"
+	green "    nginx 启动命令: systemctl start nginx.service  停止命令: systemctl stop nginx.service  重启命令: systemctl restart nginx.service"
+	green "    nginx 查看运行状态命令: systemctl status nginx.service "
+
     green " ================================================== "
 
     cat >> ${configReadme} <<-EOF
 
 Web服务器 nginx 安装成功! 伪装站点为 ${configSSLDomain}   
 伪装站点的静态html内容放置在目录 ${configWebsitePath}, 可自行更换网站内容.
-nginx 配置路径 ${nginxConfigPath}, nginx 访问日志 ${nginxAccessLogFilePath}, nginx 错误日志 ${nginxErrorLogFilePath}
-nginx 停止命令: systemctl stop nginx.service  启动命令: systemctl start nginx.service  重启命令: systemctl restart nginx.service
+nginx 配置路径 ${nginxConfigPath}
+nginx 访问日志 ${nginxAccessLogFilePath}
+nginx 错误日志 ${nginxErrorLogFilePath}
+
+nginx 查看日志命令: journalctl -n 50 -u nginx.service
+
+nginx 启动命令: systemctl start nginx.service  
+nginx 停止命令: systemctl stop nginx.service  
+nginx 重启命令: systemctl restart nginx.service
+nginx 查看运行状态命令: systemctl status nginx.service
+
 
 EOF
-
 
 	if [[ $1 == "trojan-web" ]] ; then
         cat >> ${configReadme} <<-EOF
 
 安装的Trojan-web ${versionTrojanWeb} 可视化管理面板,访问地址  ${configSSLDomain}/${configTrojanWebNginxPath}
 Trojan-web 停止命令: systemctl stop trojan-web.service  启动命令: systemctl start trojan-web.service  重启命令: systemctl restart trojan-web.service
-
 
 EOF
 	fi
@@ -1169,8 +1314,12 @@ function removeNginx(){
         apt-get remove --purge nginx nginx-full nginx-common nginx-core
     fi
 
-    rm -rf ${configSSLCertPath}
-    rm -rf ${configWebsitePath}
+
+
+    mkdir -p ${configSSLCertBakPath}
+    cp -f ${configSSLCertPath}/* ${configSSLCertBakPath}
+
+    rm -rf ${configWebsiteFatherPath}
     rm -f ${nginxAccessLogFilePath}
     rm -f ${nginxErrorLogFilePath}
 
@@ -1187,7 +1336,18 @@ function removeNginx(){
 }
 
 
-function installTrojanWholeProcess(){
+
+
+
+
+
+
+
+
+
+
+
+function installTrojanV2rayWithNginx(){
 
     stopServiceNginx
     testLinuxPortUsage
@@ -1201,45 +1361,81 @@ function installTrojanWholeProcess(){
     green " ================================================== "
 
     read configSSLDomain
+
+    echo
+    echo
+
+    green "是否申请证书? 默认为自动申请证书, 如果二次安装或已有证书 可以选否"
+    green "如果已经有SSL证书文件请放到下面路径"
+    red " ${configSSLDomain} 域名证书内容文件路径 ${configSSLCertPath}/fullchain.cer "
+    red " ${configSSLDomain} 域名证书私钥文件路径 ${configSSLCertPath}/private.key "
+    echo
+    read -p "是否申请证书? 默认为自动申请证书,如果二次安装或已有证书可以选否 请输入[Y/n]:" isDomainSSLRequestInput
+    isDomainSSLRequestInput=${isDomainSSLRequestInput:-Y}
+
     if compareRealIpWithLocalIp "${configSSLDomain}" ; then
-
-        if [[ -z $1 ]] ; then
-            if [ "$isNginxWithSSL" = "no" ] ; then
-                getHTTPSCertificate "standalone"
-                installWebServerNginx
-            else
-                getHTTPSCertificate "standalone"
-                installWebServerNginx "v2ray"
-            fi
-
+        if [[ $isDomainSSLRequestInput == [Yy] ]]; then
+            getHTTPSCertificate 
         else
-            getHTTPSCertificate "standalone"
-        fi
-
-        if test -s ${configSSLCertPath}/fullchain.cer; then
-            green " ================================================== "
-            green "     SSL证书已检测到获取成功!"
-            green " ================================================== "
-
-            if [ "$isNginxWithSSL" = "no" ] ; then
-                installTrojanServer
-            else
-                installV2ray
-            fi
-        else
-            red "==================================="
-            red " https证书没有申请成功，安装失败!"
-            red " 请检查域名和DNS是否生效, 同一域名请不要一天内多次申请!"
-            red " 请检查80和443端口是否开启, VPS服务商可能需要添加额外防火墙规则，例如阿里云、谷歌云等!"
-            red " 重启VPS, 重新执行脚本, 可重新选择修复证书选项再次申请证书 ! "
-            red " 可参考 https://www.v2rayssr.com/trojan-2.html "
-            red "==================================="
-            exit
+            green " =================================================="
+            green " 不申请域名的证书, 请把证书放到如下目录, 或自行修改trojan或v2ray配置!"
+            green " ${configSSLDomain} 域名证书内容文件路径 ${configSSLCertPath}/fullchain.cer "
+            green " ${configSSLDomain} 域名证书私钥文件路径 ${configSSLCertPath}/private.key "
+            green " =================================================="
         fi
     else
         exit
     fi
+
+
+    if test -s ${configSSLCertPath}/fullchain.cer; then
+        green " ================================================== "
+        green "     SSL证书 已检测到获取成功!"
+        green " ================================================== "
+
+        if [ "$isNginxWithSSL" = "no" ] ; then
+            installWebServerNginx
+        else
+            installWebServerNginx "v2ray"
+        fi
+
+        if [ -z $1 ]; then
+            installTrojanServer
+        elif [ $1 = "both" ]; then
+            installTrojanServer
+            installV2ray
+        else
+            installV2ray
+        fi
+    else
+        red " ================================================== "
+        red " https证书没有申请成功，安装失败!"
+        red " 请检查域名和DNS是否生效, 同一域名请不要一天内多次申请!"
+        red " 请检查80和443端口是否开启, VPS服务商可能需要添加额外防火墙规则，例如阿里云、谷歌云等!"
+        red " 重启VPS, 重新执行脚本, 可重新选择该项再次申请证书 ! "
+        red " ================================================== "
+        exit
+    fi    
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1290,8 +1486,6 @@ function installTrojanServer(){
 
     if [ "$configV2rayVlessMode" != "trojan" ] ; then
         configV2rayTrojanPort=443
-    elif [ "$configV2rayVlessMode" != "vlesstrojan" ] ; then
-        configV2rayTrojanPort=443
     fi
 
 
@@ -1317,6 +1511,15 @@ function installTrojanServer(){
         "${trojanPassword9}",
         "${trojanPassword10}",
         "${configTrojanPasswordPrefixInput}202000",
+        "${configTrojanPasswordPrefixInput}202001",
+        "${configTrojanPasswordPrefixInput}202002",
+        "${configTrojanPasswordPrefixInput}202003",
+        "${configTrojanPasswordPrefixInput}202004",
+        "${configTrojanPasswordPrefixInput}202005",
+        "${configTrojanPasswordPrefixInput}202006",
+        "${configTrojanPasswordPrefixInput}202007",
+        "${configTrojanPasswordPrefixInput}202008",
+        "${configTrojanPasswordPrefixInput}202009",
         "${configTrojanPasswordPrefixInput}202010",
         "${configTrojanPasswordPrefixInput}202011",
         "${configTrojanPasswordPrefixInput}202012",
@@ -1442,7 +1645,7 @@ function installTrojanServer(){
 }
 EOF
 
-        rm /etc/systemd/system/trojan.service   
+        # rm /etc/systemd/system/trojan.service   
         # 增加启动脚本
         cat > ${osSystemMdPath}trojan.service <<-EOF
 [Unit]
@@ -1487,6 +1690,15 @@ EOF
         "${trojanPassword9}",
         "${trojanPassword10}",
         "${configTrojanPasswordPrefixInput}202000",
+        "${configTrojanPasswordPrefixInput}202001",
+        "${configTrojanPasswordPrefixInput}202002",
+        "${configTrojanPasswordPrefixInput}202003",
+        "${configTrojanPasswordPrefixInput}202004",
+        "${configTrojanPasswordPrefixInput}202005",
+        "${configTrojanPasswordPrefixInput}202006",
+        "${configTrojanPasswordPrefixInput}202007",
+        "${configTrojanPasswordPrefixInput}202008",
+        "${configTrojanPasswordPrefixInput}202009",
         "${configTrojanPasswordPrefixInput}202010",
         "${configTrojanPasswordPrefixInput}202011",
         "${configTrojanPasswordPrefixInput}202012",
@@ -1586,17 +1798,18 @@ EOF
         "cert": "${configSSLCertPath}/fullchain.cer",
         "key": "${configSSLCertPath}/private.key",
         "key_password": "",
+        "curves": "",
+        "cipher": "",        
 	    "prefer_server_cipher": false,
+        "sni": "${configSSLDomain}",
         "alpn": [
             "http/1.1"
         ],
         "reuse_session": true,
-        "session_ticket": false,
-        "session_timeout": 600,
+        "session_ticket": true,
         "plain_http_response": "",
-        "curves": "",
-        "dhparam": "",
-        "sni": "${configSSLDomain}",
+        "fallback_addr": "127.0.0.1",
+        "fallback_port": 80,    
         "fingerprint": "firefox"
     },
     "tcp": {
@@ -1645,7 +1858,9 @@ EOF
     ${sudoCmd} systemctl enable trojan${promptInfoTrojanName}.service
 
 
-
+    if [ "$configV2rayVlessMode" != "trojan" ] ; then
+        
+    
     # 下载并制作 trojan windows 客户端的命令行启动文件
     rm -rf ${configTrojanBasePath}/trojan-win-cli
     rm -rf ${configTrojanBasePath}/trojan-win-cli-temp
@@ -1703,6 +1918,7 @@ EOF
 
     zip -r ${configWebsiteDownloadPath}/trojan-win-cli.zip ${configTrojanBasePath}/trojan-win-cli/
 
+    fi
 
 
 
@@ -1717,14 +1933,17 @@ EOF
 	green "    Trojan${promptInfoTrojanName} Version: ${configTrojanBaseVersion} 安装成功 !"
 
     if [[ ${isInstallNginx} == "true" ]]; then
-        green "    伪装站点为 http://${configSSLDomain}"
+        green "    伪装站点为 https://${configSSLDomain}"
 	    green "    伪装站点的静态html内容放置在目录 ${configWebsitePath}, 可自行更换网站内容!"
     fi
 
-	red "    Trojan 服务器端配置路径 ${configTrojanBasePath}/server.json "
-	red "    Trojan 访问日志 ${configTrojanLogFile} 或运行 journalctl -n 50 -u trojan${promptInfoTrojanName}.service 查看 !"
-	green "    Trojan 停止命令: systemctl stop trojan${promptInfoTrojanName}.service  启动命令: systemctl start trojan${promptInfoTrojanName}.service  重启命令: systemctl restart trojan${promptInfoTrojanName}.service"
-	green "    Trojan 服务器 每天会自动重启,防止内存泄漏. 运行 crontab -l 命令 查看定时重启命令 !"
+	red "    Trojan${promptInfoTrojanName} 服务器端配置路径 ${configTrojanBasePath}/server.json "
+	red "    Trojan${promptInfoTrojanName} 运行日志文件路径: ${configTrojanLogFile} "
+	green "    Trojan${promptInfoTrojanName} 查看日志命令: journalctl -n 50 -u trojan${promptInfoTrojanName}.service "
+
+	green "    Trojan${promptInfoTrojanName} 停止命令: systemctl stop trojan${promptInfoTrojanName}.service  启动命令: systemctl start trojan${promptInfoTrojanName}.service  重启命令: systemctl restart trojan${promptInfoTrojanName}.service"
+	green "    Trojan${promptInfoTrojanName} 查看运行状态命令:  systemctl status trojan${promptInfoTrojanName}.service "
+	green "    Trojan${promptInfoTrojanName} 服务器 每天会自动重启, 防止内存泄漏. 运行 crontab -l 命令 查看定时重启命令 !"
 	green "======================================================================"
 	blue  "----------------------------------------"
 	yellow "Trojan${promptInfoTrojanName} 配置信息如下, 请自行复制保存, 密码任选其一 !"
@@ -1739,7 +1958,7 @@ EOF
 	yellow "密码8: ${trojanPassword8}"
 	yellow "密码9: ${trojanPassword9}"
 	yellow "密码10: ${trojanPassword10}"
-	yellow "您指定前缀的密码共90个: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202099 都可以使用"
+	yellow "您指定前缀的密码共99个: 从 ${configTrojanPasswordPrefixInput}202000 到 ${configTrojanPasswordPrefixInput}202099 都可以使用"
 	yellow "例如: 密码:${configTrojanPasswordPrefixInput}202011 或 密码:${configTrojanPasswordPrefixInput}202088 都可以使用"
 
     if [[ ${isTrojanGoSupportWebsocket} == "true" ]]; then
@@ -1748,14 +1967,49 @@ EOF
         yellow "Websocket 双重TLS为: true 开启"
     fi
 
-	blue  "----------------------------------------"
+    echo
+    green "======================================================================"
+    yellow " Trojan${promptInfoTrojanName} 小火箭 Shadowrocket 链接地址"
+
+    if [ "$isTrojanGo" = "yes" ] ; then
+        if [[ ${isTrojanGoSupportWebsocket} == "true" ]]; then
+            green " trojan://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?peer=${configSSLDomain}&sni=${configSSLDomain}&plugin=obfs-local;obfs=websocket;obfs-host=${configSSLDomain};obfs-uri=/${configTrojanGoWebSocketPath}#${configSSLDomain}_trojan_go_ws"
+            echo
+            yellow " 二维码 Trojan${promptInfoTrojanName} "
+		    green "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${trojanPassword1}%40${configSSLDomain}%3a${configV2rayTrojanPort}%3fallowInsecure%3d0%26peer%3d${configSSLDomain}%26plugin%3dobfs-local%3bobfs%3dwebsocket%3bobfs-host%3d${configSSLDomain}%3bobfs-uri%3d/${configTrojanGoWebSocketPath}%23${configSSLDomain}_trojan_go_ws"
+
+            echo
+            yellow " Trojan${promptInfoTrojanName} QV2ray 链接地址"
+            green " trojan-go://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?sni=${configSSLDomain}&type=ws&host=${configSSLDomain}&path=%2F${configTrojanGoWebSocketPath}#${configSSLDomain}_trojan_go_ws"
+        
+        else
+            green " trojan://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?peer=${configSSLDomain}&sni=${configSSLDomain}#${configSSLDomain}_trojan_go"
+            echo
+            yellow " 二维码 Trojan${promptInfoTrojanName} "
+            green "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${trojanPassword1}%40${configSSLDomain}%3a${configV2rayTrojanPort}%3fpeer%3d${configSSLDomain}%26sni%3d${configSSLDomain}%23${configSSLDomain}_trojan_go"
+
+            echo
+            yellow " Trojan${promptInfoTrojanName} QV2ray 链接地址"
+            green " trojan-go://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?sni=${configSSLDomain}&type=original&host=${configSSLDomain}#${configSSLDomain}_trojan_go"
+        fi
+
+    else
+        green " trojan://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?peer=${configSSLDomain}&sni=${configSSLDomain}#${configSSLDomain}_trojan"
+        echo
+        yellow " 二维码 Trojan${promptInfoTrojanName} "
+		green "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${trojanPassword1}%40${configSSLDomain}%3a${configV2rayTrojanPort}%3fpeer%3d${configSSLDomain}%26sni%3d${configSSLDomain}%23${configSSLDomain}_trojan"
+
+    fi
+
+	echo
 	green "======================================================================"
 	green "请下载相应的trojan客户端:"
 	yellow "1 Windows 客户端下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/v2ray-windows.zip"
 	#yellow "  Windows 客户端另一个版本下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/trojan-Qt5-windows.zip"
 	yellow "  Windows 客户端命令行版本下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/trojan-win-cli.zip"
 	yellow "  Windows 客户端命令行版本需要搭配浏览器插件使用，例如switchyomega等! "
-    yellow "2 MacOS 客户端下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/trojan-mac.zip"
+    yellow "2 MacOS 客户端下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/v2ray-mac.zip"
+    yellow "  MacOS 另一个客户端下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/trojan-mac.zip"
     #yellow "  MacOS 客户端Trojan-Qt5下载：http://${configSSLDomain}/download/${configTrojanWindowsCliPrefixPath}/trojan-Qt5-mac.zip"
     yellow "3 Android 客户端下载 https://github.com/trojan-gfw/igniter/releases "
     yellow "  Android 另一个客户端下载 https://github.com/2dust/v2rayNG/releases "
@@ -1792,7 +2046,14 @@ EOF
 
 Trojan${promptInfoTrojanName} Version: ${configTrojanBaseVersion} 安装成功 !
 Trojan${promptInfoTrojanName} 服务器端配置路径 ${configTrojanBasePath}/server.json
-Trojan${promptInfoTrojanName} 停止命令: systemctl stop trojan${promptInfoTrojanName}.service  启动命令: systemctl start trojan${promptInfoTrojanName}.service  重启命令: systemctl restart trojan${promptInfoTrojanName}.service
+
+Trojan${promptInfoTrojanName} 运行日志文件路径: ${configTrojanLogFile} 
+Trojan${promptInfoTrojanName} 查看日志命令: journalctl -n 50 -u trojan${promptInfoTrojanName}.service
+
+Trojan${promptInfoTrojanName} 启动命令: systemctl start trojan${promptInfoTrojanName}.service
+Trojan${promptInfoTrojanName} 停止命令: systemctl stop trojan${promptInfoTrojanName}.service  
+Trojan${promptInfoTrojanName} 重启命令: systemctl restart trojan${promptInfoTrojanName}.service
+Trojan${promptInfoTrojanName} 查看运行状态命令: systemctl status trojan${promptInfoTrojanName}.service
 
 Trojan${promptInfoTrojanName}服务器地址: ${configSSLDomain}  端口: $configV2rayTrojanPort
 
@@ -1806,11 +2067,16 @@ Trojan${promptInfoTrojanName}服务器地址: ${configSSLDomain}  端口: $confi
 密码8: ${trojanPassword8}
 密码9: ${trojanPassword9}
 密码10: ${trojanPassword10}
-您指定前缀的密码共90个: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202099 都可以使用
+您指定前缀的密码共99个: 从 ${configTrojanPasswordPrefixInput}202000 到 ${configTrojanPasswordPrefixInput}202099 都可以使用
 例如: 密码:${configTrojanPasswordPrefixInput}202011 或 密码:${configTrojanPasswordPrefixInput}202088 都可以使用
 
 如果是trojan-go开启了Websocket，那么Websocket path 路径为: /${configTrojanGoWebSocketPath}
 
+小火箭链接:
+trojan://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?peer=${configSSLDomain}&sni=${configSSLDomain}#${configSSLDomain}_trojan"
+
+二维码 Trojan${promptInfoTrojanName}
+https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${trojanPassword1}%40${configSSLDomain}%3a${configV2rayTrojanPort}%3fpeer%3d${configSSLDomain}%26sni%3d${configSSLDomain}%23${configSSLDomain}_trojan
 
 EOF
 }
@@ -1878,6 +2144,69 @@ function upgradeTrojan(){
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function inputV2rayServerPort(){ 
+	echo 
+    echo
+	if [[ $1 == "textMainPort" ]]; then
+        read -p "是否自定义${promptInfoXrayName}的端口号? 直接回车默认为${configV2rayPortShowInfo}, 请输入自定义端口号[1-65535]:" isV2rayUserPortInput
+        isV2rayUserPortInput=${isV2rayUserPortInput:-${configV2rayPortShowInfo}}
+		checkPortInUse "${isV2rayUserPortInput}" $1 
+	fi
+
+	if [[ $1 == "textAdditionalPort" ]]; then
+        green " 是否添加一个额外监听端口, 与主端口${configV2rayPort}一起同时工作"
+        green " 一般用于 中转机无法使用443端口中转给目标主机时使用"
+        read -p "是否给${promptInfoXrayName}添加额外的监听端口? 直接回车默认否, 请输入额外端口号[1-65535]:" isV2rayAdditionalPortInput
+        isV2rayAdditionalPortInput=${isV2rayAdditionalPortInput:-999999}
+        checkPortInUse "${isV2rayAdditionalPortInput}" $1 
+	fi
+}
+
+function checkPortInUse(){ 
+    if [ $1 = "999999" ]; then
+        echo
+    elif [[ $1 -gt 1 && $1 -le 65535 ]]; then
+            
+        netstat -tulpn | grep [0-9]:$1 -q ; 
+        if [ $? -eq 1 ]; then 
+            green "输入的端口号 $1 没有被占用, 继续安装..."  
+            
+        else 
+            red "输入的端口号 $1 已被占用! 请退出安装, 检查端口是否已被占用 或 重新输入!" 
+            inputV2rayServerPort $2 
+        fi
+    else
+        red "输入的端口号错误! 必须是[1-65535]. 请重新输入" 
+        inputV2rayServerPort $2 
+    fi
+}
+
+
+
+
 function installV2ray(){
 
     v2rayPassword1=$(cat /proc/sys/kernel/random/uuid)
@@ -1891,19 +2220,25 @@ function installV2ray(){
     v2rayPassword9=$(cat /proc/sys/kernel/random/uuid)
     v2rayPassword10=$(cat /proc/sys/kernel/random/uuid)
 
-    if [ -f "${configV2rayPath}/v2ray" ] || [ -f "/usr/local/bin/v2ray" ] || [ -f "/usr/bin/v2ray" ]; then
+    echo
+    if [ -f "${configV2rayPath}/xray" ] || [ -f "${configV2rayPath}/v2ray" ] || [ -f "/usr/local/bin/v2ray" ] || [ -f "/usr/bin/v2ray" ]; then
         green " =================================================="
         green "     已安装过 V2ray 或 Xray, 退出安装 !"
         green " =================================================="
         exit
     fi
 
+    green " =================================================="
+    green "    开始安装 V2ray or Xray "
+    green " =================================================="    
+    echo
 
-    if [[ ( $configV2rayVlessMode == "trojan" ) || ( $configV2rayVlessMode == "vlessonly" ) || ( $configV2rayVlessMode == "vlesstrojan" ) ]] ; then
+
+    if [[ ( $configV2rayVlessMode == "trojan" ) || ( $configV2rayVlessMode == "vlessxtlsonly" ) || ( $configV2rayVlessMode == "vlessxtlstrojan" ) ]] ; then
         promptInfoXrayName="xray"
         isXray="yes"
     else
-        read -p "是否使用Xray内核(默认为V2ray内核 )? 请输入[y/N]:" isV2rayOrXrayInput
+        read -p "是否使用Xray内核? 直接回车默认为V2ray内核, 请输入[y/N]:" isV2rayOrXrayInput
         isV2rayOrXrayInput=${isV2rayOrXrayInput:-n}
 
         if [[ $isV2rayOrXrayInput == [Yy] ]]; then
@@ -1917,7 +2252,7 @@ function installV2ray(){
          configV2rayProtocol="vless"
     else 
 
-        read -p "是否使用VLESS协议(默认为VMess协议 )? 请输入[y/N]:" isV2rayUseVLessInput
+        read -p "是否使用VLESS协议? 直接回车默认为VMess协议, 请输入[y/N]:" isV2rayUseVLessInput
         isV2rayUseVLessInput=${isV2rayUseVLessInput:-n}
 
         if [[ $isV2rayUseVLessInput == [Yy] ]]; then
@@ -1928,48 +2263,146 @@ function installV2ray(){
 
     fi
 
-
-
-
-    read -p "是否使用IPV6 解锁Google 验证码 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]:" isV2rayUnlockGoogleInput
-    isV2rayUnlockGoogleInput=${isV2rayUnlockGoogleInput:-n}
+    echo
+    green " =================================================="
+    echo
+    yellow " 是否使用 IPv6 解锁流媒体和避免弹出 Google reCAPTCHA 人机验证, 请选择:"
+    red " 解锁需要先安装好 Wireguard 与 Cloudflare Warp, 可用本脚本第一项安装"
+    echo
+    green " 1. 不解锁"
+    green " 2. 避免弹出 Google reCAPTCHA 人机验证"
+    green " 3. 解锁 Netflex 限制"
+    green " 4. 解锁 Youtube 和 Youtube Premium"
+    green " 5. 解锁 全部流媒体 包括 Netflex, Youtube, Hulu, HBO, Disney, BBC, Fox, niconico 等"
+    green " 11. 同时解锁 2 和 3 项,  即为 避免弹出 Google reCAPTCHA 人机验证 和 解锁 Netflex 限制"
+    green " 12. 同时解锁 2 和 3 和 4 项, 即为 避免弹出 Google reCAPTCHA 人机验证 和 解锁 Netflex 和 Youtube 限制"
+    green " 13. 同时解锁 全部流媒体 和 避免弹出 Google reCAPTCHA 人机验证"
+    echo
+    read -p "请输入解锁选项? 直接回车默认选1 不解锁, 请输入纯数字:" isV2rayUnlockGoogleInput
+    isV2rayUnlockGoogleInput=${isV2rayUnlockGoogleInput:-1}
 
     V2rayUnlockText=""
 
-    if [[ $isV2rayUnlockGoogleInput == [Yy] ]]; then
+    if [[ $isV2rayUnlockGoogleInput == "2" ]]; then
         V2rayUnlockText="\"geosite:google\""
-    fi
 
-
-    read -p "是否使用IPV6 解锁Netflix 默认不解锁, 解锁需要配合wireguard )? 请输入[y/N]:" isV2rayUnlockNetflixInput
-    isV2rayUnlockNetflixInput=${isV2rayUnlockNetflixInput:-n}
-    
-    if [[ $isV2rayUnlockNetflixInput == [Yy] ]]; then
+    elif [[ $isV2rayUnlockGoogleInput == "3" ]]; then
         V2rayUnlockText="\"geosite:netflix\""
+        
+    elif [[ $isV2rayUnlockGoogleInput == "4" ]]; then
+        V2rayUnlockText="\"geosite:youtube\""
+
+    elif [[ $isV2rayUnlockGoogleInput == "5" ]]; then
+        V2rayUnlockText="\"geosite:netflix\", \"geosite:youtube\", \"geosite:bahamut\", \"geosite:hulu\", \"geosite:hbo\", \"geosite:disney\", \"geosite:bbc\", \"geosite:4chan\", \"geosite:fox\", \"geosite:abema\", \"geosite:dmm\", \"geosite:niconico\", \"geosite:pixiv\", \"geosite:viu\""
+
+    elif [[ $isV2rayUnlockGoogleInput == "11" ]]; then
+        V2rayUnlockText="\"geosite:google\", \"geosite:netflix\""
+
+    elif [[ $isV2rayUnlockGoogleInput == "12" ]]; then
+        V2rayUnlockText="\"geosite:google\", \"geosite:netflix\", \"geosite:youtube\""
+
+    elif [[ $isV2rayUnlockGoogleInput == "13" ]]; then
+        V2rayUnlockText="\"geosite:google\", \"geosite:netflix\", \"geosite:youtube\", \"geosite:bahamut\", \"geosite:hulu\", \"geosite:hbo\", \"geosite:disney\", \"geosite:bbc\", \"geosite:4chan\", \"geosite:fox\", \"geosite:abema\", \"geosite:dmm\", \"geosite:niconico\", \"geosite:pixiv\", \"geosite:viu\""
+    else
+        V2rayUnlockText=""
     fi
 
-    if [[ $isV2rayUnlockGoogleInput == [Yy] && $isV2rayUnlockNetflixInput == [Yy] ]]; then
-        V2rayUnlockText="\"geosite:netflix\", \"geosite:google\""
+
+					
+
+    read -p "是否自定义${promptInfoXrayName}的密码? 直接回车默认创建随机密码, 请输入自定义UUID密码:" isV2rayUserPassordInput
+    isV2rayUserPassordInput=${isV2rayUserPassordInput:-''}
+
+    if [[ -z $isV2rayUserPassordInput ]]; then
+        echo
+    else
+        v2rayPassword1=${isV2rayUserPassordInput}
     fi
 
 
 
+    # 增加自定义端口号
+    if [[ ${isInstallNginx} == "true" ]]; then
+        configV2rayPortShowInfo=443
+        
+        if [[ $configV2rayVlessMode == "vlessxtlstrojan" ]]; then
+            configV2rayPort=443
+        fi
+    else
+        configV2rayPort="$(($RANDOM + 10000))"
+        
+        if [[ -n "$configV2rayVlessMode" ]]; then
+            configV2rayPort=443
+        fi
+        configV2rayPortShowInfo=$configV2rayPort
+
+        inputV2rayServerPort "textMainPort"
+
+        configV2rayPort=${isV2rayUserPortInput}   
+        configV2rayPortShowInfo=${isV2rayUserPortInput}   
+
+
+
+        configV2rayWebSocketPath=$(cat /dev/urandom | head -1 | md5sum | head -c 8)
+
+        read -p "是否自定义${promptInfoXrayName}的WS的Path? 直接回车默认创建随机路径, 请输入自定义路径(不要输入/):" isV2rayUserWSPathInput
+        isV2rayUserWSPathInput=${isV2rayUserWSPathInput:-${configV2rayWebSocketPath}}
+
+        if [[ -z $isV2rayUserWSPathInput ]]; then
+            echo
+        else
+            configV2rayWebSocketPath=${isV2rayUserWSPathInput}
+        fi
+
+
+        
+        
+        inputV2rayServerPort "textAdditionalPort"
+
+        if [[ $isV2rayAdditionalPortInput == "999999" ]]; then
+            v2rayConfigAdditionalPortInput=""
+        else
+            
+            read -r -d '' v2rayConfigAdditionalPortInput << EOM
+        ,
+        {
+            "listen": "0.0.0.0",
+            "port": ${isV2rayAdditionalPortInput}, 
+            "protocol": "dokodemo-door",
+            "settings": {
+                "address": "127.0.0.1",
+                "port": ${configV2rayPort},
+                "network": "tcp, udp",
+                "followRedirect": false 
+            },
+            "sniffing": {
+            "enabled": true,
+            "destOverride": ["http", "tls"]
+            }
+        }     
+     
+EOM
+
+        fi
+
+    fi
+
+
+
+
+    
     if [ "$isXray" = "no" ] ; then
         getTrojanAndV2rayVersion "v2ray"
-        green " =================================================="
-        green "    开始安装 V2ray Version: ${versionV2ray} !"
-        green " =================================================="
+        green "    准备下载并安装 V2ray Version: ${versionV2ray} !"
         promptInfoXrayInstall="V2ray"
         promptInfoXrayVersion=${versionV2ray}
     else
         getTrojanAndV2rayVersion "xray"
-        green " =================================================="
-        green "    开始安装 Xray Version: ${versionXray} !"
-        green " =================================================="
+        green "    准备下载并安装 Xray Version: ${versionXray} !"
         promptInfoXrayInstall="Xray"
         promptInfoXrayVersion=${versionXray}
     fi
-
+    echo
 
 
     mkdir -p ${configV2rayPath}
@@ -1984,6 +2417,12 @@ function installV2ray(){
     else
         downloadAndUnzip "https://github.com/XTLS/Xray-core/releases/download/v${versionXray}/${downloadFilenameXray}" "${configV2rayPath}" "${downloadFilenameXray}"
     fi
+
+
+
+
+
+
 
 
     # 增加 v2ray 服务器端配置
@@ -2204,7 +2643,207 @@ function installV2ray(){
                         "password": "${configTrojanPasswordPrefixInput}202030",
                         "level": 0,
                         "email": "password230@gmail.com"
-                    }
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202031",
+                        "level": 0,
+                        "email": "password231@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202032",
+                        "level": 0,
+                        "email": "password232@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202033",
+                        "level": 0,
+                        "email": "password233@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202034",
+                        "level": 0,
+                        "email": "password234@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202035",
+                        "level": 0,
+                        "email": "password235@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202036",
+                        "level": 0,
+                        "email": "password236@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202037",
+                        "level": 0,
+                        "email": "password237@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202038",
+                        "level": 0,
+                        "email": "password238@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202039",
+                        "level": 0,
+                        "email": "password239@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202040",
+                        "level": 0,
+                        "email": "password240@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202041",
+                        "level": 0,
+                        "email": "password241@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202042",
+                        "level": 0,
+                        "email": "password242@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202043",
+                        "level": 0,
+                        "email": "password243@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202044",
+                        "level": 0,
+                        "email": "password244@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202045",
+                        "level": 0,
+                        "email": "password245@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202046",
+                        "level": 0,
+                        "email": "password246@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202047",
+                        "level": 0,
+                        "email": "password247@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202048",
+                        "level": 0,
+                        "email": "password248@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202049",
+                        "level": 0,
+                        "email": "password249@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202050",
+                        "level": 0,
+                        "email": "password250@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202051",
+                        "level": 0,
+                        "email": "password251@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202052",
+                        "level": 0,
+                        "email": "password252@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202053",
+                        "level": 0,
+                        "email": "password253@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202054",
+                        "level": 0,
+                        "email": "password254@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202055",
+                        "level": 0,
+                        "email": "password255@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202056",
+                        "level": 0,
+                        "email": "password256@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202057",
+                        "level": 0,
+                        "email": "password257@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202058",
+                        "level": 0,
+                        "email": "password258@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202059",
+                        "level": 0,
+                        "email": "password259@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202060",
+                        "level": 0,
+                        "email": "password260@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202061",
+                        "level": 0,
+                        "email": "password261@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202062",
+                        "level": 0,
+                        "email": "password262@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202063",
+                        "level": 0,
+                        "email": "password263@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202064",
+                        "level": 0,
+                        "email": "password264@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202065",
+                        "level": 0,
+                        "email": "password265@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202066",
+                        "level": 0,
+                        "email": "password266@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202067",
+                        "level": 0,
+                        "email": "password267@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202068",
+                        "level": 0,
+                        "email": "password268@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202069",
+                        "level": 0,
+                        "email": "password269@gmail.com"
+                    },
+                    {
+                        "password": "${configTrojanPasswordPrefixInput}202070",
+                        "level": 0,
+                        "email": "password270@gmail.com"
+                    }                                       
 EOM
 
 
@@ -2325,7 +2964,24 @@ EOM
 EOM
 
 
-    if [[ $isV2rayUnlockGoogleInput == [Yy] || $isV2rayUnlockNetflixInput == [Yy] ]]; then
+    if [[ $isV2rayUnlockGoogleInput == "1" ]]; then
+
+        read -r -d '' v2rayConfigOutboundInput << EOM
+    "outbounds": [
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {}
+        },
+        {
+            "tag": "blocked",
+            "protocol": "blackhole",
+            "settings": {}
+        }
+    ]
+EOM
+
+    else
 
         read -r -d '' v2rayConfigOutboundInput << EOM
     "outbounds": [
@@ -2356,22 +3012,6 @@ EOM
             }
         ]
     }
-EOM
-
-    else
-        read -r -d '' v2rayConfigOutboundInput << EOM
-    "outbounds": [
-        {
-            "tag": "direct",
-            "protocol": "freedom",
-            "settings": {}
-        },
-        {
-            "tag": "blocked",
-            "protocol": "blackhole",
-            "settings": {}
-        }
-    ]
 EOM
         
     fi
@@ -2411,6 +3051,7 @@ EOM
                 }
             }
         }
+        ${v2rayConfigAdditionalPortInput}
     ],
     ${v2rayConfigOutboundInput}
 }
@@ -2424,7 +3065,7 @@ EOF
     ${v2rayConfigLogInput}
     "inbounds": [
         {
-            "port": 443,
+            "port": ${configV2rayPort},
             "protocol": "${configV2rayProtocol}",
             "settings": {
                 "clients": [
@@ -2437,7 +3078,7 @@ EOF
                     },
                     {
                         "path": "/${configV2rayWebSocketPath}",
-                        "dest": ${configV2rayPort},
+                        "dest": ${configV2rayVmesWSPort},
                         "xver": 1
                     }
                 ]
@@ -2459,7 +3100,7 @@ EOF
             }
         },
         {
-            "port": ${configV2rayPort},
+            "port": ${configV2rayVmesWSPort},
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -2477,6 +3118,7 @@ EOF
                 }
             }
         }
+        ${v2rayConfigAdditionalPortInput}
     ],
     ${v2rayConfigOutboundInput}
 }
@@ -2490,7 +3132,7 @@ EOF
     ${v2rayConfigLogInput}
     "inbounds": [
         {
-            "port": 443,
+            "port": ${configV2rayPort},
             "protocol": "${configV2rayProtocol}",
             "settings": {
                 "clients": [
@@ -2503,7 +3145,7 @@ EOF
                     },
                     {
                         "path": "/${configV2rayWebSocketPath}",
-                        "dest": ${configV2rayPort},
+                        "dest": ${configV2rayVmesWSPort},
                         "xver": 1
                     },
                     {
@@ -2530,7 +3172,7 @@ EOF
             }
         },
         {
-            "port": ${configV2rayPort},
+            "port": ${configV2rayVmesWSPort},
             "listen": "127.0.0.1",
             "protocol": "vmess",
             "settings": {
@@ -2571,6 +3213,7 @@ EOF
                 }
             }
         }
+        ${v2rayConfigAdditionalPortInput}
     ],
     ${v2rayConfigOutboundInput}
 }
@@ -2579,13 +3222,13 @@ EOF
 
 
 
-    if [[  $configV2rayVlessMode == "vlesstrojan" ]]; then
+    if [[  $configV2rayVlessMode == "vlessxtlstrojan" ]]; then
             cat > ${configV2rayPath}/config.json <<-EOF
 {
     ${v2rayConfigLogInput}
     "inbounds": [
         {
-            "port": 443,
+            "port": ${configV2rayPort},
             "protocol": "${configV2rayProtocol}",
             "settings": {
                 "clients": [
@@ -2599,7 +3242,7 @@ EOF
                     },
                     {
                         "path": "/${configV2rayWebSocketPath}",
-                        "dest": ${configV2rayPort},
+                        "dest": ${configV2rayVmesWSPort},
                         "xver": 1
                     }
                 ]
@@ -2643,7 +3286,7 @@ EOF
             }
         },
         {
-            "port": ${configV2rayPort},
+            "port": ${configV2rayVmesWSPort},
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -2661,6 +3304,7 @@ EOF
                 }
             }
         }
+        ${v2rayConfigAdditionalPortInput}
     ],
     ${v2rayConfigOutboundInput}
 }
@@ -2668,13 +3312,13 @@ EOF
     fi
 
 
-    if [[  $configV2rayVlessMode == "vlessonly" ]]; then
+    if [[  $configV2rayVlessMode == "vlessxtlsonly" ]]; then
             cat > ${configV2rayPath}/config.json <<-EOF
 {
     ${v2rayConfigLogInput}
     "inbounds": [
         {
-            "port": 443,
+            "port": ${configV2rayPort},
             "protocol": "${configV2rayProtocol}",
             "settings": {
                 "clients": [
@@ -2687,7 +3331,7 @@ EOF
                     },
                     {
                         "path": "/${configV2rayWebSocketPath}",
-                        "dest": ${configV2rayPort},
+                        "dest": ${configV2rayVmesWSPort},
                         "xver": 1
                     }
                 ]
@@ -2709,7 +3353,7 @@ EOF
             }
         },
         {
-            "port": ${configV2rayPort},
+            "port": ${configV2rayVmesWSPort},
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -2727,6 +3371,7 @@ EOF
                 }
             }
         }
+        ${v2rayConfigAdditionalPortInput}
     ],
     ${v2rayConfigOutboundInput}
 }
@@ -2741,7 +3386,7 @@ EOF
     ${v2rayConfigLogInput}
     "inbounds": [
         {
-            "port": 443,
+            "port": ${configV2rayPort},
             "protocol": "${configV2rayProtocol}",
             "settings": {
                 "clients": [
@@ -2760,7 +3405,7 @@ EOF
                     },
                     {
                         "path": "/${configV2rayWebSocketPath}",
-                        "dest": ${configV2rayPort},
+                        "dest": ${configV2rayVmesWSPort},
                         "xver": 1
                     }
                 ]
@@ -2782,7 +3427,7 @@ EOF
             }
         },
         {
-            "port": ${configV2rayPort},
+            "port": ${configV2rayVmesWSPort},
             "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
@@ -2800,14 +3445,13 @@ EOF
                 }
             }
         }
+        ${v2rayConfigAdditionalPortInput}
     ],
     ${v2rayConfigOutboundInput}
 }
 EOF
 
     fi
-
-
 
 
 
@@ -2864,26 +3508,46 @@ EOF
     ${sudoCmd} chmod +x ${configV2rayPath}/${promptInfoXrayName}
     ${sudoCmd} chmod +x ${osSystemMdPath}${promptInfoXrayName}.service
     ${sudoCmd} systemctl daemon-reload
-    ${sudoCmd} systemctl restart ${promptInfoXrayName}.service
+    
     ${sudoCmd} systemctl enable ${promptInfoXrayName}.service
-
+    ${sudoCmd} systemctl restart ${promptInfoXrayName}.service
 
 
 
     # 增加客户端配置说明
-    if [[ ${isInstallNginx} == "true" ]]; then
-        configV2rayPortShowInfo=443
-        configV2rayIsTlsShowInfo="tls"
-    else
-        configV2rayIsTlsShowInfo="none"
-    fi
-
-    if [[ -n "$configV2rayVlessMode" ]]; then
-        configV2rayPortShowInfo=443
-        configV2rayIsTlsShowInfo="tls"
+    if [[ ${isInstallNginx} != "true" ]]; then
+        if [[ -z "$configV2rayVlessMode" ]]; then
+                        
+            configV2rayIsTlsShowInfo="none"
+        fi
     fi
 
 
+    # https://stackoverflow.com/questions/296536/how-to-urlencode-data-for-curl-command
+
+    rawurlencode() {
+        local string="${1}"
+        local strlen=${#string}
+        local encoded=""
+        local pos c o
+
+        for (( pos=0 ; pos<strlen ; pos++ )); do
+            c=${string:$pos:1}
+            case "$c" in
+                [-_.~a-zA-Z0-9] ) o="${c}" ;;
+                * )               printf -v o '%%%02x' "'$c"
+            esac
+            encoded+="${o}"
+        done
+        echo
+        green "URL Encoded: ${encoded}"    # You can either set a return variable (FASTER) 
+        v2rayPassUrl="${encoded}"   #+or echo the result (EASIER)... or both... :p
+    }
+
+    rawurlencode "${v2rayPassword1}"
+
+    base64VmessLink=$(echo -n '{"port":"'${configV2rayPortShowInfo}'","ps":'${configSSLDomain}',"tls":"tls","id":'"${v2rayPassword1}"',"aid":"1","v":"2","host":"'${configSSLDomain}'","type":"none","path":"/'${configV2rayWebSocketPath}'","net":"ws","add":"'${configSSLDomain}'","allowInsecure":0,"method":"none","peer":"'${configSSLDomain}'"}' | sed 's#/#\\\/#g' | base64)
+    base64VmessLink2=$(echo ${base64VmessLink} | sed 's/ //g')
 
 
     cat > ${configV2rayPath}/clientConfig.json <<-EOF
@@ -2895,164 +3559,225 @@ EOF
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
     加密方式: aes-128-gcm,  // 如果是Vless协议则为none
-    传输协议: ws,
-    WS路径:/${configV2rayWebSocketPath},
+    传输协议: websocket,
+    websocket路径:/${configV2rayWebSocketPath},
     底层传输协议:${configV2rayIsTlsShowInfo},
     别名:自己起个任意名称
 }
+
+导入链接 Vless:
+${configV2rayProtocol}://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=${configV2rayIsTlsShowInfo}&type=ws&host=${configSSLDomain}&headerType=none#${configSSLDomain}
+
+导入链接 Vmess:
+vmess://${base64VmessLink2}
+
+
 EOF
 
 
 
-if [[ "$configV2rayVlessMode" == "vmessws" ]]; then
+    if [[ "$configV2rayVlessMode" == "vmessws" ]]; then
+
+    base64VmessLink=$(echo -n '{"port":"'${configV2rayPort}'","ps":'${configSSLDomain}',"tls":"tls","id":'"${v2rayPassword1}"',"aid":"1","v":"2","host":"'${configSSLDomain}'","type":"none","path":"/'${configV2rayWebSocketPath}'","net":"ws","add":"'${configSSLDomain}'","allowInsecure":0,"method":"none","peer":"'${configSSLDomain}'"}' | sed 's#/#\\\/#g' | base64)
+    base64VmessLink2=$(echo ${base64VmessLink} | sed 's/ //g')
+
+    base64VmessLinkTCP=$(echo -n '{"port":"'${configV2rayPort}'","ps":'${configSSLDomain}',"tls":"tls","id":'"${v2rayPassword1}"',"aid":"1","v":"2","host":"'${configSSLDomain}'","type":"none","path":"/tcp'${configV2rayWebSocketPath}'","net":"tcp","add":"'${configSSLDomain}'","allowInsecure":0,"method":"none","peer":"'${configSSLDomain}'"}' | sed 's#/#\\\/#g' | base64)
+    base64VmessLinkTCP2=$(echo ${base64VmessLinkTCP} | sed 's/ //g')
+
+
     cat > ${configV2rayPath}/clientConfig.json <<-EOF
 当选择了17. 只安装v2ray VLess运行在443端口 (VLess-TCP-TLS) + (VMess-TCP-TLS) + (VMess-WS-TLS)  支持CDN, 不安装nginx
 =========== ${promptInfoXrayInstall}客户端 VLess-TCP-TLS 配置参数 =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
     加密方式: none,  // 如果是Vless协议则为none
     传输协议: tcp ,
-    WS路径:无,
+    websocket路径:无,
     底层传输:tls,
     别名:自己起个任意名称
 }
+
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=tls&type=tcp&host=${configSSLDomain}&headerType=none#${configSSLDomain}
+
 
 =========== ${promptInfoXrayInstall}客户端 VMess-WS-TLS 配置参数 支持CDN =============
 {
     协议: VMess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
-    加密方式: none,  // 如果是Vless协议则为none
-    传输协议: ws,
-    WS路径:/${configV2rayWebSocketPath},
+    加密方式: auto,  // 如果是Vless协议则为none
+    传输协议: websocket,
+    websocket路径:/${configV2rayWebSocketPath},
     底层传输:tls,
     别名:自己起个任意名称
 }
+
+导入链接 Vmess:
+vmess://${base64VmessLink2}
+
+导入链接新版:
+vmess://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=auto&security=tls&type=ws&host=${configSSLDomain}&path=%2f${configV2rayWebSocketPath}#${configSSLDomain}
+
+
 
 =========== ${promptInfoXrayInstall}客户端 VMess-TCP-TLS 配置参数 支持CDN =============
 {
     协议: VMess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
-    加密方式: none,  // 如果是Vless协议则为none
+    加密方式: auto,  // 如果是Vless协议则为none
     传输协议: tcp,
     路径:/tcp${configV2rayWebSocketPath},
     底层传输:tls,
     别名:自己起个任意名称
 }
+
+导入链接 Vmess:
+vmess://${base64VmessLinkTCP2}
+
+导入链接新版:
+vmess://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=auto&security=tls&type=tcp&host=${configSSLDomain}&path=%2ftcp${configV2rayWebSocketPath}#${configSSLDomain}
+
+
 EOF
-fi
+    fi
 
 
-if [[ "$configV2rayVlessMode" == "vlessws" ]]; then
+    if [[ "$configV2rayVlessMode" == "vlessws" ]]; then
+
     cat > ${configV2rayPath}/clientConfig.json <<-EOF
 当选择了16. 只安装v2ray VLess运行在443端口 (VLess-TCP-TLS) + (VLess-WS-TLS) 支持CDN, 不安装nginx
 =========== ${promptInfoXrayInstall}客户端 VLess-TCP-TLS 配置参数 =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
     流控flow:  // 选择了16 为空
     加密方式: none,  // 如果是Vless协议则为none
     传输协议: tcp ,
-    WS路径:无,
+    websocket路径:无,
     底层传输协议:tls,   
     别名:自己起个任意名称
 }
 
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=tls&type=tcp&host=${configSSLDomain}&headerType=none#${configSSLDomain}
+
+
 =========== ${promptInfoXrayInstall}客户端 VLess-WS-TLS 配置参数 支持CDN =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
-    流控flow:  // 选择了16 为空
+    流控flow:  空
     加密方式: none,  // 如果是Vless协议则为none
-    传输协议: ws,
-    WS路径:/${configV2rayWebSocketPath},
+    传输协议: websocket,
+    websocket路径:/${configV2rayWebSocketPath},
     底层传输:tls,     
     别名:自己起个任意名称
 }
+
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=tls&type=ws&host=${configSSLDomain}&path=%2f${configV2rayWebSocketPath}#${configSSLDomain}
+
 EOF
-fi
+    fi
 
 
-if [[ "$configV2rayVlessMode" == "vlessonly" ]] || [[ "$configV2rayVlessMode" == "trojan" ]]; then
+    if [[ "$configV2rayVlessMode" == "vlessxtlsonly" ]] || [[ "$configV2rayVlessMode" == "trojan" ]]; then
     cat > ${configV2rayPath}/clientConfig.json <<-EOF
 =========== ${promptInfoXrayInstall}客户端 VLess-TCP-TLS 配置参数 =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
     流控flow: xtls-rprx-direct
     加密方式: none,  // 如果是Vless协议则为none
     传输协议: tcp ,
-    WS路径:无,
+    websocket路径:无,
     底层传输协议:xtls, 
     别名:自己起个任意名称
 }
+
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=xtls&type=tcp&host=${configSSLDomain}&headerType=none&flow=xtls-rprx-direct#${configSSLDomain}
+
 
 =========== ${promptInfoXrayInstall}客户端 VLess-WS-TLS 配置参数 支持CDN =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
-    流控flow: xtls-rprx-direct // 选择了16 为空, 选择了20-23 为 xtls-rprx-direct
+    流控flow: 空
     加密方式: none,  // 如果是Vless协议则为none
-    传输协议: ws,
-    WS路径:/${configV2rayWebSocketPath},
+    传输协议: websocket,
+    websocket路径:/${configV2rayWebSocketPath},
     底层传输:tls,     
     别名:自己起个任意名称
 }
-EOF
-fi
 
-if [[ "$configV2rayVlessMode" == "vlesstrojan" ]]; then
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=tls&type=ws&host=${configSSLDomain}&path=%2f${configV2rayWebSocketPath}#${configSSLDomain}
+
+EOF
+    fi
+
+    if [[ "$configV2rayVlessMode" == "vlessxtlstrojan" ]]; then
     cat > ${configV2rayPath}/clientConfig.json <<-EOF
 =========== ${promptInfoXrayInstall}客户端 VLess-TCP-TLS 配置参数 =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
     流控flow: xtls-rprx-direct
-    加密方式: none,  // 如果是Vless协议则为none
+    加密方式: none,  
     传输协议: tcp ,
-    WS路径:无,
+    websocket路径:无,
     底层传输协议:xtls, 
     别名:自己起个任意名称
 }
+
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=xtls&type=tcp&host=${configSSLDomain}&headerType=none&flow=xtls-rprx-direct#${configSSLDomain}
+
 
 =========== ${promptInfoXrayInstall}客户端 VLess-WS-TLS 配置参数 支持CDN =============
 {
     协议: VLess,
     地址: ${configSSLDomain},
-    端口: ${configV2rayPortShowInfo},
+    端口: ${configV2rayPort},
     uuid: ${v2rayPassword1},
     额外id: 0,  // AlterID 如果是Vless协议则不需要该项
-    流控flow: xtls-rprx-direct // 选择了16 为空, 选择了20-23 为 xtls-rprx-direct
-    加密方式: none,  // 如果是Vless协议则为none
-    传输协议: ws,
-    WS路径:/${configV2rayWebSocketPath},
+    流控flow: 空, 
+    加密方式: none,  
+    传输协议: websocket,
+    websocket路径:/${configV2rayWebSocketPath},
     底层传输:tls,     
     别名:自己起个任意名称
 }
+
+导入链接:
+vless://${v2rayPassUrl}@${configSSLDomain}:${configV2rayPort}?encryption=none&security=tls&type=ws&host=${configSSLDomain}&path=%2f${configV2rayWebSocketPath}#${configSSLDomain}
+
 
 
 Trojan${promptInfoTrojanName}服务器地址: ${configSSLDomain}  端口: $configV2rayTrojanPort
@@ -3067,12 +3792,18 @@ Trojan${promptInfoTrojanName}服务器地址: ${configSSLDomain}  端口: $confi
 密码8: ${trojanPassword8}
 密码9: ${trojanPassword9}
 密码10: ${trojanPassword10}
-您指定前缀的密码若干: 从 ${configTrojanPasswordPrefixInput}202010 到 ${configTrojanPasswordPrefixInput}202030 都可以使用
+您指定前缀的密码若干: 从 ${configTrojanPasswordPrefixInput}202000 到 ${configTrojanPasswordPrefixInput}202070 都可以使用
+
+
+小火箭链接:
+trojan://${trojanPassword1}@${configSSLDomain}:${configV2rayTrojanPort}?peer=${configSSLDomain}&sni=${configSSLDomain}#${configSSLDomain}_trojan
+
+二维码 Trojan${promptInfoTrojanName}
+https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=trojan%3a%2f%2f${trojanPassword1}%40${configSSLDomain}%3a${configV2rayTrojanPort}%3fpeer%3d${configSSLDomain}%26sni%3d${configSSLDomain}%23${configSSLDomain}_trojan
+
 
 EOF
-fi
-
-
+    fi
 
 
 
@@ -3087,14 +3818,16 @@ fi
 
     if [[ ${isInstallNginx} == "true" ]]; then
         green "    伪装站点为 https://${configSSLDomain}!"
+	    green "    伪装站点的静态html内容放置在目录 ${configWebsitePath}, 可自行更换网站内容!"
     fi
 	
 	red "    ${promptInfoXrayInstall} 服务器端配置路径 ${configV2rayPath}/config.json !"
-	red "    ${promptInfoXrayInstall} 访问日志 ${configV2rayAccessLogFilePath} !"
-	red "    ${promptInfoXrayInstall} 错误日志 ${configV2rayErrorLogFilePath} ! 或运行 journalctl -n 50 -u ${promptInfoXrayName}.service 查看 !"
+	green "    ${promptInfoXrayInstall} 访问日志 ${configV2rayAccessLogFilePath} !"
+	green "    ${promptInfoXrayInstall} 错误日志 ${configV2rayErrorLogFilePath} ! "
+	green "    ${promptInfoXrayInstall} 查看日志命令: journalctl -n 50 -u ${promptInfoXrayName}.service "
 	green "    ${promptInfoXrayInstall} 停止命令: systemctl stop ${promptInfoXrayName}.service  启动命令: systemctl start ${promptInfoXrayName}.service  重启命令: systemctl restart ${promptInfoXrayName}.service"
-	# green "    caddy 停止命令: systemctl stop caddy.service  启动命令: systemctl start caddy.service  重启命令: systemctl restart caddy.service"
-	green "    ${promptInfoXrayInstall} 服务器 每天会自动重启,防止内存泄漏. 运行 crontab -l 命令 查看定时重启命令 !"
+	green "    ${promptInfoXrayInstall} 查看运行状态命令:  systemctl status ${promptInfoXrayName}.service "
+	green "    ${promptInfoXrayInstall} 服务器 每天会自动重启, 防止内存泄漏. 运行 crontab -l 命令 查看定时重启命令 !"
 	green "======================================================================"
 	echo ""
 	yellow "${promptInfoXrayInstall} 配置信息如下, 请自行复制保存, 密码任选其一 (密码即用户ID或UUID) !!"
@@ -3126,24 +3859,37 @@ fi
 
     cat >> ${configReadme} <<-EOF
 
+
+
+
 ${promptInfoXrayInstall} Version: ${promptInfoXrayVersion} 安装成功 ! 
 ${promptInfoXrayInstall} 服务器端配置路径 ${configV2rayPath}/config.json 
-${promptInfoXrayInstall} 访问日志 ${configV2rayAccessLogFilePath} , V2ray 错误日志 ${configV2rayErrorLogFilePath}
-${promptInfoXrayInstall} 停止命令: systemctl stop ${promptInfoXrayName}.service  启动命令: systemctl start ${promptInfoXrayName}.service  重启命令: systemctl restart ${promptInfoXrayName}.service
+
+${promptInfoXrayInstall} 访问日志 ${configV2rayAccessLogFilePath}
+${promptInfoXrayInstall} 错误日志 ${configV2rayErrorLogFilePath}
+
+${promptInfoXrayInstall} 查看日志命令: journalctl -n 50 -u ${promptInfoXrayName}.service
+
+${promptInfoXrayInstall} 启动命令: systemctl start ${promptInfoXrayName}.service  
+${promptInfoXrayInstall} 停止命令: systemctl stop ${promptInfoXrayName}.service  
+${promptInfoXrayInstall} 重启命令: systemctl restart ${promptInfoXrayName}.service
+${promptInfoXrayInstall} 查看运行状态命令:  systemctl status ${promptInfoXrayName}.service 
 
 ${promptInfoXrayInstall} 配置信息如下, 请自行复制保存, 密码任选其一 (密码即用户ID或UUID) !
+
 服务器地址: ${configSSLDomain}  
-端口: ${configV2rayPortShowInfo}"
-用户ID或密码1: ${v2rayPassword1}"
-用户ID或密码2: ${v2rayPassword2}"
-用户ID或密码3: ${v2rayPassword3}"
-用户ID或密码4: ${v2rayPassword4}"
-用户ID或密码5: ${v2rayPassword5}"
-用户ID或密码6: ${v2rayPassword6}"
-用户ID或密码7: ${v2rayPassword7}"
-用户ID或密码8: ${v2rayPassword8}"
-用户ID或密码9: ${v2rayPassword9}"
-用户ID或密码10: ${v2rayPassword10}"
+端口: ${configV2rayPortShowInfo}
+用户ID或密码1: ${v2rayPassword1}
+用户ID或密码2: ${v2rayPassword2}
+用户ID或密码3: ${v2rayPassword3}
+用户ID或密码4: ${v2rayPassword4}
+用户ID或密码5: ${v2rayPassword5}
+用户ID或密码6: ${v2rayPassword6}
+用户ID或密码7: ${v2rayPassword7}
+用户ID或密码8: ${v2rayPassword8}
+用户ID或密码9: ${v2rayPassword9}
+用户ID或密码10: ${v2rayPassword10}
+
 
 
 EOF
@@ -3234,9 +3980,46 @@ function upgradeV2ray(){
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function installTrojanWeb(){
     # wget -O trojan-web_install.sh -N --no-check-certificate "https://raw.githubusercontent.com/Jrohy/trojan/master/install.sh" && chmod +x trojan-web_install.sh && ./trojan-web_install.sh
-
 
     if [ -f "${configTrojanWebPath}/trojan-web" ] ; then
         green " =================================================="
@@ -3261,9 +4044,11 @@ function installTrojanWeb(){
         green "    开始安装 Trojan-web 可视化管理面板: ${versionTrojanWeb} !"
         green " =================================================="
 
+
         mkdir -p ${configTrojanWebPath}
         wget -O ${configTrojanWebPath}/trojan-web --no-check-certificate "https://github.com/Jrohy/trojan/releases/download/v${versionTrojanWeb}/${downloadFilenameTrojanWeb}"
         chmod +x ${configTrojanWebPath}/trojan-web
+
 
         # 增加启动脚本
         cat > ${osSystemMdPath}trojan-web.service <<-EOF
@@ -3285,8 +4070,8 @@ WantedBy=multi-user.target
 EOF
 
         ${sudoCmd} systemctl daemon-reload
-        ${sudoCmd} systemctl restart trojan-web.service
         ${sudoCmd} systemctl enable trojan-web.service
+        ${sudoCmd} systemctl start trojan-web.service
 
         green " =================================================="
         green " Trojan-web 可视化管理面板: ${versionTrojanWeb} 安装成功!"
@@ -3311,6 +4096,7 @@ EOF
     fi
 }
 
+
 function removeTrojanWeb(){
     # wget -O trojan-web_install.sh -N --no-check-certificate "https://raw.githubusercontent.com/Jrohy/trojan/master/install.sh" && chmod +x trojan-web_install.sh && ./trojan-web_install.sh --remove
 
@@ -3321,17 +4107,24 @@ function removeTrojanWeb(){
     ${sudoCmd} systemctl stop trojan.service
     ${sudoCmd} systemctl stop trojan-web.service
     ${sudoCmd} systemctl disable trojan-web.service
-
-    # 移除trojan web 管理程序  和数据库 leveldb文件
-    # rm -f /usr/local/bin/trojan
-    rm -rf ${configTrojanWebPath}
-    rm -f ${osSystemMdPath}trojan-web.service
-    rm -rf /var/lib/trojan-manager
+    
 
     # 移除trojan
     rm -rf /usr/bin/trojan
     rm -rf /usr/local/etc/trojan
     rm -f ${osSystemMdPath}trojan.service
+    rm -f /etc/systemd/system/trojan.service
+    rm -f /usr/local/etc/trojan/config.json
+
+
+    # 移除trojan web 管理程序 
+    # rm -f /usr/local/bin/trojan
+    rm -rf ${configTrojanWebPath}
+    rm -f ${osSystemMdPath}trojan-web.service
+    rm -rf /var/lib/trojan-manager
+
+    ${sudoCmd} systemctl daemon-reload
+
 
     # 移除trojan的专用数据库
     docker rm -f trojan-mysql
@@ -3342,6 +4135,7 @@ function removeTrojanWeb(){
 
     # 移除环境变量
     sed -i '/trojan/d' ${HOME}/.${osSystemShell}rc
+    # source ${HOME}/.${osSystemShell}rc
 
     crontab -r
 
@@ -3386,6 +4180,12 @@ function runTrojanWebLog(){
 }
 
 
+
+
+
+
+
+
 function installV2rayUI(){
 
     stopServiceNginx
@@ -3424,6 +4224,19 @@ function upgradeV2rayUI(){
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 function getHTTPSNoNgix(){
     #stopServiceNginx
     #testLinuxPortUsage
@@ -3443,25 +4256,7 @@ function getHTTPSNoNgix(){
 
     if compareRealIpWithLocalIp "${configSSLDomain}" ; then
         if [[ $isDomainSSLRequestInput == [Yy] ]]; then
-
             getHTTPSCertificate "standalone"
-
-            if test -s ${configSSLCertPath}/fullchain.cer; then
-                green " =================================================="
-                green "   域名SSL证书申请成功 !"
-                green " ${configSSLDomain} 域名证书内容文件路径 ${configSSLCertPath}/fullchain.cer "
-                green " ${configSSLDomain} 域名证书私钥文件路径 ${configSSLCertPath}/private.key "
-                green " =================================================="
-
-            else
-                red "==================================="
-                red " https证书没有申请成功，安装失败!"
-                red " 请检查域名和DNS是否生效, 同一域名请不要一天内多次申请!"
-                red " 请检查80和443端口是否开启, VPS服务商可能需要添加额外防火墙规则，例如阿里云、谷歌云等!"
-                red " 重启VPS, 重新执行脚本, 可重新选择修复证书选项再次申请证书 ! "
-                red "==================================="
-                exit
-            fi
 
         else
             green " =================================================="
@@ -3475,19 +4270,46 @@ function getHTTPSNoNgix(){
     fi
 
 
+    if test -s ${configSSLCertPath}/fullchain.cer; then
+        green " =================================================="
+        green "   域名SSL证书申请成功 !"
+        green " ${configSSLDomain} 域名证书内容文件路径 ${configSSLCertPath}/fullchain.cer "
+        green " ${configSSLDomain} 域名证书私钥文件路径 ${configSSLCertPath}/private.key "
+        green " =================================================="
 
-    if [[ $1 == "trojan" ]] ; then
-        installTrojanServer
-    fi
-
-    if [[ $1 == "v2ray" ]] ; then
-        installV2ray
-
-        if [[ $configV2rayVlessMode == "trojan" ]]; then
+        if [[ $1 == "trojan" ]] ; then
             installTrojanServer
-        fi
+
+        elif [[ $1 == "both" ]] ; then
+            installV2ray
+            installTrojanServer
+        else
+            installV2ray
+        fi        
+
+    else
+        red " ================================================== "
+        red " https证书没有申请成功，安装失败!"
+        red " 请检查域名和DNS是否生效, 同一域名请不要一天内多次申请!"
+        red " 请检查80和443端口是否开启, VPS服务商可能需要添加额外防火墙规则，例如阿里云、谷歌云等!"
+        red " 重启VPS, 重新执行脚本, 可重新选择该项再次申请证书 ! "
+        red " ================================================== "
+        exit
     fi
+
+
+
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3530,44 +4352,42 @@ function startMenuOther(){
     green " 7. 升级 v2ray UI 到最新版本"
     red " 8. 卸载 v2ray UI"
     echo
-    red " 安装上述2款可视化管理面板 之前不能用本脚本安装过trojan或v2ray 安装过请先用本脚本卸载!"
-    red " 安装上述2款可视化管理面板 之前不能用其他脚本安装过trojan或v2ray 安装过请先用其他脚本卸载!"
-    red " 上述2款可视化管理面板 无法同时安装!"
+    red " 安装上面2个可视化管理面板 之前不能用本脚本或其他脚本安装过trojan或v2ray! 2个管理面板也无法同时安装"
 
     green " =================================================="
-
     green " 11. 单独申请域名SSL证书"
     green " 12. 只安装trojan 运行在443端口, 不安装nginx, 请确保443端口没有被nginx占用"
     green " 13. 只安装trojan-go 运行在443端口, 不支持CDN, 不开启websocket, 不安装nginx. 请确保80端口有监听,否则trojan-go无法启动"
     green " 14. 只安装trojan-go 运行在443端口, 支持CDN, 开启websocket, 不安装nginx. 请确保80端口有监听,否则trojan-go无法启动"    
-    green " 15. 只安装V2Ray或Xray (VLess或VMess协议) 开启websocket, 支持CDN, (VLess/VMess+WS) 不安装nginx,无TLS加密,方便与现有网站或宝塔面板集成"
-    green " 16. 只安装V2Ray VLess运行在443端口 (VLess-TCP-TLS) + (VLess-WS-TLS) 支持CDN, 不安装nginx"
-    green " 17. 只安装V2Ray VLess运行在443端口 (VLess-TCP-TLS) + (VMess-TCP-TLS) + (VMess-WS-TLS) 支持CDN, 不安装nginx"
+    echo
+    green " 15. 只安装V2ray或Xray (VLess或VMess协议) 开启websocket, 支持CDN, (VLess/VMess+WS) 不安装nginx,无TLS加密,方便与现有网站或宝塔面板集成"
+    green " 16. 只安装V2ray VLess运行在443端口 (VLess-TCP-TLS) + (VLess-WS-TLS) 支持CDN, 不安装nginx"
+    green " 17. 只安装V2ray VLess运行在443端口 (VLess-TCP-TLS) + (VMess-TCP-TLS) + (VMess-WS-TLS) 支持CDN, 不安装nginx"
+    echo
     green " 20. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS), 不安装nginx" 
-    green " 21. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + trojan 支持VLess的CDN, 不安装nginx"    
-    green " 22. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + trojan-go 支持VLess的CDN, 不安装nginx"   
-    green " 23. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + trojan-go 支持VLess的CDN和trojan-go的CDN, 不安装nginx"   
-    green " 24. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + xray自带的trojan 支持VLess的CDN, 不安装nginx"    
+    green " 21. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + trojan, 支持VLess的CDN, 不安装nginx"    
+    green " 22. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + trojan-go, 支持VLess的CDN, 不安装nginx"   
+    green " 23. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + trojan-go, 支持VLess的CDN和trojan-go的CDN, 不安装nginx"   
+    green " 24. 只安装Xray VLess运行在443端口 (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + xray自带的trojan, 支持VLess的CDN, 不安装nginx"    
 
     red " 27. 卸载 trojan"    
     red " 28. 卸载 trojan-go"   
     red " 29. 卸载 v2ray或Xray"   
-
     green " =================================================="
+
     echo
-    green " 以下是 VPS 测网速工具"
-    red " 脚本测速会大量消耗 VPS 流量，请悉知！"
     green " 31. 测试VPS 是否支持Netflix, 检测IP解锁范围及对应所在的地区"
     echo
+    red " 以下是 VPS 测网速工具, 脚本测速会消耗大量 VPS 流量，请悉知！"
     green " 32. superspeed 三网纯测速 （全国各地三大运营商部分节点全面测速）"
     green " 33. 由teddysun 编写的Bench 综合测试 （包含系统信息 IO 测试 多处数据中心的节点测试 ）"
 	green " 34. testrace 回程路由测试 （四网路由测试）"
 	green " 35. LemonBench 快速全方位测试 （包含CPU内存性能、回程、速度）"
     green " 36. ZBench 综合网速测试 （包含节点测速, Ping 以及 路由测试）"
-
     echo
-    green " 41. 安装 BBR-PLUS 加速4合一脚本 by chiakge" 
-    green " 42. 安装新版本 BBR-PLUS 加速6合一脚本 by ylx2016" 
+    green " 51. 安装 官方宝塔面板"
+    green " 52. 安装 宝塔面板破解版 by fenhao.me"
+    green " 53. 安装 宝塔面板 7.4.5 纯净版 by hostcli.com"
     echo
     green " 9. 返回上级菜单"
     green " 0. 退出脚本"
@@ -3629,26 +4449,26 @@ function startMenuOther(){
             getHTTPSNoNgix "v2ray"
         ;;    
         20 )
-            configV2rayVlessMode="vlessonly"
+            configV2rayVlessMode="vlessxtlsonly"
             getHTTPSNoNgix "v2ray"
         ;; 
         21 )
             configV2rayVlessMode="trojan"
-            getHTTPSNoNgix "v2ray"
+            getHTTPSNoNgix "both"
         ;;
         22 )
             configV2rayVlessMode="trojan"
             isTrojanGo="yes"
-            getHTTPSNoNgix "v2ray"
+            getHTTPSNoNgix "both"
         ;;    
         23 )
             configV2rayVlessMode="trojan"
             isTrojanGo="yes"
             isTrojanGoSupportWebsocket="true"
-            getHTTPSNoNgix "v2ray"
+            getHTTPSNoNgix "both"
         ;;
         24 )
-            configV2rayVlessMode="vlesstrojan"
+            configV2rayVlessMode="vlessxtlstrojan"
             getHTTPSNoNgix "v2ray"
         ;;          
         27 )
@@ -3680,10 +4500,19 @@ function startMenuOther(){
         36 )
             vps_zbench
         ;;        
-        41 )
+        51 )
+            installBTPanel
+        ;;
+        52 )
+            installBTPanelCrack
+        ;;                              
+        52 )
+            installBTPanelCrack2
+        ;;                              
+        81 )
             installBBR
         ;;
-        42 )
+        82 )
             installBBR2
         ;;                              
         9)
@@ -3717,6 +4546,14 @@ function startMenuOther(){
 
 
 
+
+
+
+
+
+
+
+
 function start_menu(){
     clear
 
@@ -3729,41 +4566,41 @@ function start_menu(){
     green " Trojan Trojan-go V2ray 一键安装脚本 | 2021-04-15 | By jinwyp | 系统支持：centos7+ / debian9+ / ubuntu16.04+"
     red " *请不要在任何生产环境使用此脚本 请不要有其他程序占用80和443端口"
     green " ===================================================================================================="
-    green " 1. 安装 linux 内核 BBR-PLUS, 安装 WireGuard, 用于解锁 google 验证码 和 Netflix 限制"
+    green " 1. 安装 linux 内核 BBR Plus, 安装 WireGuard, 用于解锁 Netflix 限制 和避免弹出 Google reCAPTCHA 人机验证"
     echo
-    green " 2. 安装 trojan 和 nginx 不支持CDN"
-    green " 3. 修复证书 并继续安装 trojan"
-    green " 4. 升级 trojan 到最新版本"
-    red " 5. 卸载 trojan 与 nginx"
+    green " 2. 安装 trojan 和 nginx 不支持CDN, trojan 运行在443端口"
+    green " 3. 升级 trojan 到最新版本"
+    red " 4. 卸载 trojan 与 nginx"
     echo
-    green " 6. 安装 trojan-go 和 nginx 不支持CDN, 不开启websocket (兼容trojan客户端)"
-    green " 7. 修复证书 并继续安装 trojan-go 不支持CDN, 不开启websocket"
-    green " 8. 安装 trojan-go 和 nginx 支持CDN 开启websocket (兼容trojan客户端但不兼容websocket)"
-    green " 9. 修复证书 并继续安装 trojan-go 支持CDN, 开启websocket"
-    green " 10. 升级 trojan-go 到最新版本"
-    red " 11. 卸载 trojan-go 与 nginx"
+    green " 5. 安装 trojan-go 和 nginx 不支持CDN, 不开启websocket (兼容trojan客户端), trojan-go 运行在443端口"
+    green " 6. 安装 trojan-go 和 nginx 支持CDN 开启websocket (兼容trojan客户端但不兼容websocket), trojan-go 运行在443端口"
+    green " 7. 升级 trojan-go 到最新版本"
+    red " 8. 卸载 trojan-go 与 nginx"
     echo
-    green " 12. 安装 v2ray或xray 和 nginx, 支持 websocket tls1.3, 支持CDN"
+    green " 11. 安装 v2ray或xray 和 nginx, 支持 websocket tls1.3, 支持CDN, nginx 运行在443端口"
+    green " 12. 安装 xray 和 nginx, (VLess-TCP-XTLS direct) + (VLess-WS-TLS) + xray自带的trojan, 支持CDN, xray 运行在443端口"  
     green " 13. 升级 v2ray或xray 到最新版本"
     red " 14. 卸载v2ray或xray 和 nginx"
     echo
-    green " 15. 同时安装 trojan + v2ray或xray 和 nginx, 不支持CDN"
-    green " 16. 升级 v2ray或xray 和 trojan 到最新版本"
-    red " 17. 卸载 trojan, v2ray或xray 和 nginx"
-    green " 18. 同时安装 trojan-go + v2ray或xray 和 nginx, 不支持CDN"
-    green " 19. 同时安装 trojan-go + v2ray或xray 和 nginx, trojan-go 和 v2ray 都支持CDN"
-    green " 20. 升级 v2ray或xray 和 trojan-go 到最新版本"
-    red " 21. 卸载 trojan-go, v2ray或xray 和 nginx"
+    green " 21. 同时安装 trojan + v2ray或xray 和 nginx, 不支持CDN, trojan 运行在443端口"
+    green " 22. 升级 v2ray或xray 和 trojan 到最新版本"
+    red " 23. 卸载 trojan, v2ray或xray 和 nginx"
+    echo
+    green " 24. 同时安装 trojan-go + v2ray或xray 和 nginx, trojan-go不支持CDN, v2ray或xray 支持CDN, trojan-go 运行在443端口"
+    green " 25. 同时安装 trojan-go + v2ray或xray 和 nginx, trojan-go 和 v2ray 都支持CDN, trojan-go 运行在443端口"
+    green " 26. 升级 v2ray或xray 和 trojan-go 到最新版本"
+    red " 27. 卸载 trojan-go, v2ray或xray 和 nginx"
     echo
     green " 28. 查看已安装的配置和用户密码等信息"
     green " 29. 子菜单 安装 trojan 和 v2ray 可视化管理面板, 测网速工具, Netflix 测试工具"
-    green " 30. 不安装nginx,只安装trojan或v2ray或xray,可选安装SSL证书, 方便与现有网站或宝塔面板集成"
+    green " 30. 不安装nginx, 只安装trojan或v2ray或xray, 可选安装SSL证书, 方便与现有网站或宝塔面板集成"
     green " =================================================="
     green " 31. 安装OhMyZsh与插件zsh-autosuggestions, Micro编辑器 等软件"
     green " 32. 开启root用户SSH登陆, 如谷歌云默认关闭root登录,可以通过此项开启"
     green " 33. 修改SSH 登陆端口号"
     green " 34. 设置时区为北京时间"
     green " 35. 用 VI 编辑 authorized_keys 文件, 方便填入公钥, 免密码登录, 增加安全性"
+    green " 88. 升级脚本"
     green " 0. 退出脚本"
     echo
     read -p "请输入数字:" menuNumberInput
@@ -3772,49 +4609,41 @@ function start_menu(){
             installWireguard
         ;;
         2 )
-            installTrojanWholeProcess
+            installTrojanV2rayWithNginx
         ;;
         3 )
-            installTrojanWholeProcess "repair"
-        ;;
-        4 )
             upgradeTrojan
         ;;
-        5 )
+        4 )
             removeNginx
             removeTrojan
+        ;;
+        5 )
+            isTrojanGo="yes"
+            installTrojanV2rayWithNginx
         ;;
         6 )
             isTrojanGo="yes"
-            installTrojanWholeProcess
+            isTrojanGoSupportWebsocket="true"
+            installTrojanV2rayWithNginx
         ;;
         7 )
             isTrojanGo="yes"
-            installTrojanWholeProcess "repair"
-        ;;
-        8 )
-            isTrojanGo="yes"
-            isTrojanGoSupportWebsocket="true"
-            installTrojanWholeProcess
-        ;;
-        9 )
-            isTrojanGo="yes"
-            isTrojanGoSupportWebsocket="true"
-            installTrojanWholeProcess "repair"
-        ;;
-        10 )
-            isTrojanGo="yes"
             upgradeTrojan
         ;;
-        11 )
+        8 )
             isTrojanGo="yes"
             removeNginx
             removeTrojan
         ;;
-        12 )
+        11 )
             isNginxWithSSL="yes"
-            installTrojanWholeProcess
+            installTrojanV2rayWithNginx "v2ray"
         ;;
+        12 )
+            configV2rayVlessMode="vlessxtlstrojan"
+            installTrojanV2rayWithNginx "v2ray"
+        ;;        
         13 )
             upgradeV2ray
         ;;
@@ -3822,36 +4651,33 @@ function start_menu(){
             removeNginx
             removeV2ray
         ;;
-        15 )
-            installTrojanWholeProcess
-            installV2ray
+        21 )
+            installTrojanV2rayWithNginx "both"
         ;;
-        16 )
+        22 )
             upgradeTrojan
             upgradeV2ray
         ;;
-        17 )
+        23 )
             removeNginx
             removeTrojan
             removeV2ray
         ;;
-        18 )
+        24 )
             isTrojanGo="yes"
-            installTrojanWholeProcess
-            installV2ray
+            installTrojanV2rayWithNginx "both"
         ;;
-        19 )
+        25 )
             isTrojanGo="yes"
             isTrojanGoSupportWebsocket="true"
-            installTrojanWholeProcess
-            installV2ray
+            installTrojanV2rayWithNginx "both"
         ;;
-        20 )
+        26 )
             isTrojanGo="yes"
             upgradeTrojan
             upgradeV2ray
         ;;
-        21 )
+        27 )
             isTrojanGo="yes"
             removeNginx
             removeTrojan
@@ -3862,7 +4688,6 @@ function start_menu(){
         ;;        
         31 )
             setLinuxDateZone
-            testLinuxPortUsage
             installPackage
             installSoftEditor
             installSoftOhMyZsh
@@ -3891,14 +4716,17 @@ function start_menu(){
         30 )
             startMenuOther
         ;;        
-        86 )
+        81 )
             installBBR
         ;;
-        87 )
+        82 )
             installBBR2
         ;;        
-        88 )
+        83 )
             installPackage
+        ;;
+        88 )
+            upgradeScript
         ;;
         99 )
             getTrojanAndV2rayVersion "trojan"
@@ -3919,8 +4747,6 @@ function start_menu(){
         ;;
     esac
 }
-
-
 
 start_menu "first"
 

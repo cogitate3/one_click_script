@@ -22,7 +22,8 @@
 
 
 # centos8 安装完成默认内核  kernel-core-4.18.0-240.15.1.el8_3.x86_64, kernel-modules-4.18.0-240.15.1.el8_3.x86_64
-# ubuntu20 安装完成默认内核  linux-generic 4.15.0.140, linux-headers-4.15.0-140
+# ubuntu18 安装完成默认内核  linux-generic 4.15.0.140, linux-headers-4.15.0-140
+# ubuntu20 安装完成默认内核  linux-image-5.4.0-70-generic , linux-headers-5.4.0-70 
 # debian10 安装完成默认内核  4.19.0-16-amd64
 
 # UJX6N 编译的bbr plus 内核  5.10.27-bbrplus    5.9.16    5.4.86  
@@ -33,6 +34,8 @@
 # BBR 速度评测 
 # https://www.shopee6.com/web/web-tutorial/bbr-vs-plus-vs-bbr2.html
 # https://hostloc.com/thread-644985-1-1.html
+
+# https://dropbox.tech/infrastructure/evaluating-bbrv2-on-the-dropbox-edge-network
 
 
 
@@ -241,6 +244,12 @@ virt_check(){
 
 function installSoftDownload(){
 	if [[ "${osRelease}" == "debian" || "${osRelease}" == "ubuntu" ]]; then
+        if [[ "${osRelease}" == "debian" ]]; then
+            echo "deb http://deb.debian.org/debian buster-backports main contrib non-free" > /etc/apt/sources.list.d/buster-backports.list
+            echo "deb-src http://deb.debian.org/debian buster-backports main contrib non-free" >> /etc/apt/sources.list.d/buster-backports.list
+            ${sudoCmd} apt update
+        fi
+
 		if ! dpkg -l | grep -qw wget; then
 			${osSystemPackage} -y install wget curl git
 		fi
@@ -251,6 +260,11 @@ function installSoftDownload(){
             ${osSystemPackage} -y install cpu-checker
 		fi
 
+        if ! dpkg -l | grep -qw ca-certificates; then
+			${osSystemPackage} -y install ca-certificates dmidecode
+            update-ca-certificates
+		fi        
+
 	elif [[ "${osRelease}" == "centos" ]]; then
 		if ! rpm -qa | grep -qw wget; then
 			${osSystemPackage} -y install wget curl git bc
@@ -259,16 +273,27 @@ function installSoftDownload(){
         if ! rpm -qa | grep -qw bc; then
 			${osSystemPackage} -y install bc
 		fi
-	fi
 
+        # 处理ca证书
+        if ! rpm -qa | grep -qw ca-certificates; then
+			${osSystemPackage} -y install ca-certificates dmidecode
+            update-ca-trust force-enable
+		fi
+	fi
+    
 }
 
 
 function rebootSystem(){
-   
-    red "请检查上面的信息 是否有新内核版本, 老内核版本 ${osKernelVersionBackup} 是否已经卸载!"
-    echo
-    red "请注意检查 是否把新内核也误删卸载了, 无新内核 ${linuxKernelToInstallVersionFull} 不要重启, 可重新安装内核后再重启! "
+
+    if [ -z $1 ]; then
+
+        red "请检查上面的信息 是否有新内核版本, 老内核版本 ${osKernelVersionBackup} 是否已经卸载!"
+        echo
+        red "请注意检查 是否把新内核也误删卸载了, 无新内核 ${linuxKernelToInstallVersionFull} 不要重启, 可重新安装内核后再重启! "
+
+    fi
+
     echo
 	read -p "是否立即重启? 请输入[Y/n]?" isRebootInput
 	isRebootInput=${isRebootInput:-Y}
@@ -345,8 +370,12 @@ function listAvailableLinuxKernel(){
     green " 状态显示--当前可以被安装的 Linux 内核: "
     if [[ "${osRelease}" == "centos" ]]; then
 		${sudoCmd} yum --disablerepo="*" --enablerepo="elrepo-kernel" list available | grep kernel
-	else
-        ${sudoCmd} apt-cache search linux-image
+	else   
+        if [ -z $1 ]; then
+            ${sudoCmd} apt-cache search linux-image
+        else
+            ${sudoCmd} apt-cache search linux-image | grep $1
+        fi
 	fi
     
     green " =================================================="
@@ -354,6 +383,7 @@ function listAvailableLinuxKernel(){
 }
 
 function listInstalledLinuxKernel(){
+    echo
     green " =================================================="
     green " 状态显示--当前已安装的 Linux 内核: "
     echo
@@ -363,6 +393,9 @@ function listInstalledLinuxKernel(){
 		# dpkg -l | grep linux-
         # dpkg-query -l | grep linux-
         # apt list --installed | grep linux-
+        echo
+        red " 如安装内核遇到kernel linux-image linux-headers 版本不一致问题, 请手动卸载已安装的kernel" 
+        red " 卸载内核命令 apt remove -y --purge linux-xxx名称"         
 
 	elif [[ "${osRelease}" == "centos" ]]; then
         ${sudoCmd} rpm -qa | grep kernel
@@ -386,10 +419,13 @@ function showLinuxKernelInfoNoDisplay(){
 
     if [[ ${osKernelVersionFull} == *bbrplus* ]]; then
         osKernelBBRStatus="BBR Plus"
+    elif [[ ${osKernelVersionFull} == *xanmod* ]]; then
+        osKernelBBRStatus="BBR 和 BBR2"
     fi
 
 	net_congestion_control=`cat /proc/sys/net/ipv4/tcp_congestion_control | awk '{print $1}'`
 	net_qdisc=`cat /proc/sys/net/core/default_qdisc | awk '{print $1}'`
+	net_ecn=`cat /proc/sys/net/ipv4/tcp_ecn | awk '{print $1}'`
 
     if [[ ${osKernelVersionBackup} == *4.14.129* ]]; then
         # isBBREnabled=$(grep "net.ipv4.tcp_congestion_control" /etc/sysctl.conf | awk -F "=" '{print $2}')
@@ -397,12 +433,22 @@ function showLinuxKernelInfoNoDisplay(){
 
         isBBRTcpEnabled=$(lsmod | grep "bbr" | awk '{print $1}')
         isBBRPlusTcpEnabled=$(lsmod | grep "bbrplus" | awk '{print $1}')
+        isBBR2TcpEnabled=$(lsmod | grep "bbr2" | awk '{print $1}')
     else
         isBBRTcpEnabled=$(sysctl net.ipv4.tcp_congestion_control | grep "bbr" | awk -F "=" '{print $2}' | awk '{$1=$1;print}')
         isBBRPlusTcpEnabled=$(sysctl net.ipv4.tcp_congestion_control | grep "bbrplus" | awk -F "=" '{print $2}' | awk '{$1=$1;print}')
+        isBBR2TcpEnabled=$(sysctl net.ipv4.tcp_congestion_control | grep "bbr2" | awk -F "=" '{print $2}' | awk '{$1=$1;print}')
     fi
 
-
+    if [[ ${net_ecn} == "1" ]]; then
+        systemECNStatusText="已开启"      
+    elif [[ ${net_ecn} == "0" ]]; then
+        systemECNStatusText="已关闭"   
+    elif [[ ${net_ecn} == "2" ]]; then
+        systemECNStatusText="只对入站请求开启(默认值)"       
+    else
+        systemECNStatusText="" 
+    fi
 
     if [[ ${net_congestion_control} == "bbr" ]]; then
         
@@ -421,6 +467,16 @@ function showLinuxKernelInfoNoDisplay(){
         else 
             systemBBRRunningStatusText="BBR Plus 启动失败"
         fi
+
+    elif [[ ${net_congestion_control} == "bbr2" ]]; then
+
+        if [[ ${isBBR2TcpEnabled} == *"bbr2"* ]]; then
+            systemBBRRunningStatus="bbr2"
+            systemBBRRunningStatusText="BBR2 已启动成功"            
+        else 
+            systemBBRRunningStatusText="BBR2 启动失败"
+        fi
+                
     else 
         systemBBRRunningStatusText="未启动加速模块"
     fi
@@ -438,20 +494,22 @@ function showLinuxKernelInfo(){
     green " 状态显示--当前Linux 内核版本: ${osKernelVersionShort} , $(uname -r) "
 
     if versionCompareWithOp "${isKernelSupportBBRVersion}" "${osKernelVersionShort}" ">"; then
-        green " 状态显示--当前系统内核低于4.9, 不支持开启 BBR "   
+        green "           当前系统内核低于4.9, 不支持开启 BBR "   
     else
-        green " 状态显示--当前系统内核高于4.9, 支持开启 BBR, ${systemBBRRunningStatusText}"
-        osKernelBBRStatus="BBR"
+        green "           当前系统内核高于4.9, 支持开启 BBR, ${systemBBRRunningStatusText}"
+    fi
+
+    if [[ ${osKernelVersionFull} == *xanmod* ]]; then
+        green "           当前系统内核已支持开启 BBR2, ${systemBBRRunningStatusText}"
+    else
+        green "           当前系统内核不支持开启 BBR2"
     fi
 
     if [[ ${osKernelVersionFull} == *bbrplus* ]]; then
-        green " 状态显示--当前系统内核已支持开启 BBR Plus, ${systemBBRRunningStatusText}"
-        osKernelBBRStatus="BBR Plus"
+        green "           当前系统内核已支持开启 BBR Plus, ${systemBBRRunningStatusText}"
     else
-        green " 状态显示--当前系统内核不支持开启 BBR Plus"
+        green "           当前系统内核不支持开启 BBR Plus"
     fi
-
-
     # sysctl net.ipv4.tcp_available_congestion_control 返回值 net.ipv4.tcp_available_congestion_control = bbr cubic reno 或 reno cubic bbr
     # sysctl net.ipv4.tcp_congestion_control 返回值 net.ipv4.tcp_congestion_control = bbr
     # sysctl net.core.default_qdisc 返回值 net.core.default_qdisc = fq
@@ -482,82 +540,248 @@ function showLinuxKernelInfo(){
 }
 
 
-enableBBRSysctlConfig() {
+function enableBBRSysctlConfig(){
     # https://hostloc.com/thread-644985-1-1.html
     # 优质线路用5.5+cake和原版bbr带宽跑的更足，不过cake的话就算高峰也不会像原版bbr那样跑不动，相比plus能慢些，但是区别不大，
     # bbr plus的话美西或者一些延迟高的，用起来更好，锐速针对丢包高的有奇效
     # 带宽大，并且延迟低不丢包的话5.5+cake在我这比较好，延迟高用plus更好，丢包多锐速最好. 一般130ms以下用cake不错，以上的话用plus更好些
 
+    # https://github.com/xanmod/linux/issues/26
+    # 说白了 bbrplus 就是改了点东西，然后那部分修改在 5.1 内核里合并进去了, 5.1 及以上的内核里自带的 bbr 已经包含了所谓的 bbrplus 的修改。
+    # PS：bbr 是一直在修改的，比如说 5.0 内核的 bbr，4.15 内核的 bbr 和 4.9 内核的 bbr 其实都是不一样的
+
+    # https://sysctl-explorer.net/net/ipv4/tcp_ecn/
+
+
     removeBbrSysctlConfig
     currentBBRText="bbr"
     currentQueueText="fq"
+    currentECNValue="2"
+    currentECNText=""
 
     if [ $1 = "bbrplus" ]; then
         currentBBRText="bbrplus"
-    elif [ $1 = "bbr2" ]; then
-        currentBBRText="bbr2"
+
     else
-        currentBBRText="bbr"
-        
         echo
-        echo " 请选择队列算法 (1) FQ,  (2) FQ-PIE,  (3) CAKE "
-        red " 选择 2 FQ-PIE 队列算法 需要内核在 5.6 以上"
-        red " 选择 3 CAKE 队列算法 需要内核在 5.5 以上"
-        read -p "请选择队列算法? 直接回车默认选1 FQ, 请输入[1/2/3]:" BBRQueueInput
-        BBRQueueInput=${BBRQueueInput:-i}
+        echo " 请选择开启 (1) BBR 还是 (2) BBR2 网络加速 "
+        red " 选择 1 BBR 需要内核在 4.9 以上"
+        red " 选择 2 BBR2 需要内核为 XanMod "
+        read -p "请选择? 直接回车默认选1 BBR, 请输入[1/2]:" BBRTcpInput
+        BBRTcpInput=${BBRTcpInput:-1}
+        if [[ $BBRTcpInput == [2] ]]; then
+            if [[ ${osKernelVersionFull} == *xanmod* ]]; then
+                currentBBRText="bbr2"
 
-        if [[ $BBRQueueInput == [2] ]]; then
-            currentQueueText="fq_pie"
-
-        elif [[ $BBRQueueInput == [3] ]]; then
-            currentQueueText="cake"
-
+                echo
+                echo " 请选择是否开启 ECN, (1) 关闭 (2) 开启 (3) 仅对入站请求开启 "
+                red " 注意: 开启 ECN 可能会造成网络设备无法访问"
+                read -p "请选择? 直接回车默认选1 关闭ECN, 请输入[1/2]:" ECNTcpInput
+                ECNTcpInput=${ECNTcpInput:-1}
+                if [[ $ECNTcpInput == [2] ]]; then
+                    currentECNValue="1"
+                    currentECNText="+ ECN"
+                elif [[ $ECNTcpInput == [3] ]]; then
+                    currentECNValue="2"
+                else
+                    currentECNValue="0"
+                fi
+                
+            else
+                echo
+                red " 当前系统内核没有安装 XanMod 内核, 无法开启BBR2, 改为开启BBR"
+                echo
+                currentBBRText="bbr"
+            fi
+            
         else
-            currentQueueText="fq"
+            currentBBRText="bbr"
         fi
+    fi
 
+    echo
+    echo " 请选择队列算法 (1) FQ,  (2) FQ-Codel,  (3) FQ-PIE,  (4) CAKE "
+    red " 选择 2 FQ-Codel 队列算法 需要内核在 4.13 以上"
+    red " 选择 3 FQ-PIE 队列算法 需要内核在 5.6 以上"
+    red " 选择 4 CAKE 队列算法 需要内核在 5.5 以上"
+    read -p "请选择队列算法? 直接回车默认选1 FQ, 请输入[1/2/3/4]:" BBRQueueInput
+    BBRQueueInput=${BBRQueueInput:-1}
+
+    if [[ $BBRQueueInput == [2] ]]; then
+        currentQueueText="fq_codel"
+
+    elif [[ $BBRQueueInput == [3] ]]; then
+        currentQueueText="fq_pie"
+
+    elif [[ $BBRQueueInput == [4] ]]; then
+        currentQueueText="cake"
+
+    else
+        currentQueueText="fq"
     fi
 
     echo "net.core.default_qdisc=${currentQueueText}" >> /etc/sysctl.conf
 	echo "net.ipv4.tcp_congestion_control=${currentBBRText}" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_ecn=${currentECNValue}" >> /etc/sysctl.conf
 
     isSysctlText=$(sysctl -p 2>&1 | grep "No such file") 
 
     echo
     if [[ -z "$isSysctlText" ]]; then
-		green " 已成功开启 ${currentBBRText} + ${currentQueueText}"
+		green " 已成功开启 ${currentBBRText} + ${currentQueueText} ${currentECNText} "
 	else
-        green " 已成功开启 ${currentBBRText}"
+        green " 已成功开启 ${currentBBRText} ${currentECNText}"
         red " 但当前内核版本过低, 开启队列算法 ${currentQueueText} 失败! " 
         red "请重新运行脚本, 选择'2 开启 BBR 加速'后, 务必再选择 (1)FQ 队列算法 !"
     fi
     echo
+    
 
-    # rebootSystem
+    read -p "是否优化系统网络配置? 直接回车默认优化, 请输入[Y/n]:" isOptimizingSystemInput
+    isOptimizingSystemInput=${isOptimizingSystemInput:-Y}
+
+    if [[ $isOptimizingSystemInput == [Yy] ]]; then
+        addOptimizingSystemConfig
+    else
+    	sysctl -p
+    fi
+
 }
 
 # 卸载 bbr+锐速 配置
-removeBbrSysctlConfig(){
+function removeBbrSysctlConfig(){
     sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
     sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
 
 	sed -i '/net.ipv4.tcp_ecn/d' /etc/sysctl.conf
-
-    echo
-	sysctl -p
 		
 	if [[ -e /appex/bin/lotServer.sh ]]; then
 		bash <(wget --no-check-certificate -qO- https://git.io/lotServerInstall.sh) uninstall
 	fi
+}
 
-	# echo -e "${Info}:清除bbr/lotserver加速完成。"
+
+function removeOptimizingSystemConfig(){
+    removeBbrSysctlConfig
+
+    sed -i '/fs.file-max/d' /etc/sysctl.conf
+	sed -i '/fs.inotify.max_user_instances/d' /etc/sysctl.conf
+
+	sed -i '/net.ipv4.tcp_syncookies/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.tcp_fin_timeout/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.tcp_tw_reuse/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.ip_local_port_range/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_max_syn_backlog/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.tcp_max_tw_buckets/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.route.gc_timeout/d' /etc/sysctl.conf
+
+	sed -i '/net.ipv4.tcp_syn_retries/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_synack_retries/d' /etc/sysctl.conf
+	sed -i '/net.core.somaxconn/d' /etc/sysctl.conf
+	sed -i '/net.core.netdev_max_backlog/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.tcp_timestamps/d' /etc/sysctl.conf
+	sed -i '/net.ipv4.tcp_max_orphans/d' /etc/sysctl.conf
+
+	sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
+
+
+    sed -i '/1000000/d' /etc/security/limits.conf
+    sed -i '/1000000/d' /etc/profile
+
+    echo
+    green " 已删除当前系统的网络优化配置 "
+    echo
+}
+
+function addOptimizingSystemConfig(){
+
+    # https://ustack.io/2019-11-21-Linux%E5%87%A0%E4%B8%AA%E9%87%8D%E8%A6%81%E7%9A%84%E5%86%85%E6%A0%B8%E9%85%8D%E7%BD%AE.html
+    # https://www.cnblogs.com/xkus/p/7463135.html
+
+    # 优化系统配置
+
+    if grep -q "1000000" "/etc/profile"; then
+        echo
+        green " 系统网络配置 已经优化过, 不需要再次优化 "
+        echo
+        sysctl -p
+        echo
+        exit
+    fi
+
+    removeOptimizingSystemConfig
+
+    echo
+    green " 开始准备 优化系统网络配置 "
+
+    cat >> /etc/sysctl.conf <<-EOF
+
+fs.file-max = 1000000
+fs.inotify.max_user_instances = 8192
+
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.ip_local_port_range = 1024 65000
+net.ipv4.tcp_max_syn_backlog = 16384
+net.ipv4.tcp_max_tw_buckets = 6000
+net.ipv4.route.gc_timeout = 100
+
+net.ipv4.tcp_syn_retries = 1
+net.ipv4.tcp_synack_retries = 1
+net.core.somaxconn = 32768
+net.core.netdev_max_backlog = 32768
+net.ipv4.tcp_timestamps = 0
+net.ipv4.tcp_max_orphans = 32768
+
+# forward ipv4
+net.ipv4.ip_forward = 1
+
+
+EOF
+
+
+
+    cat >> /etc/security/limits.conf <<-EOF
+*               soft    nofile          1000000
+*               hard    nofile          1000000
+EOF
+
+
+	echo "ulimit -SHn 1000000" >> /etc/profile
+    source /etc/profile
+
+
+    echo
+	sysctl -p
+
+    echo
+    green " 已完成 系统网络配置的优化 "
+    echo
+    rebootSystem "noinfo"
+
 }
 
 
 
+function startIpv4(){
+
+    cat >> /etc/sysctl.conf <<-EOF
+net.ipv4.tcp_retries2 = 8
+net.ipv4.tcp_slow_start_after_idle = 0
+
+# forward ipv4
+
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+
+EOF
 
 
-
+}
 
 
 
@@ -629,22 +853,22 @@ function downloadFile(){
 function installKernel(){
 
     if [ "${linuxKernelToInstallVersion}" = "5.10" ]; then 
-        bbrplusKernelVersion="5.10.27-1"
+        bbrplusKernelVersion="5.10.28-1"
         
     elif [ "${linuxKernelToInstallVersion}" = "5.9" ]; then 
-        bbrplusKernelVersion="5.9.16-5"
+        bbrplusKernelVersion="5.9.16-1"
         
     elif [ "${linuxKernelToInstallVersion}" = "5.4" ]; then 
-        bbrplusKernelVersion="5.4.109-1"
+        bbrplusKernelVersion="5.4.110-1"
 
     elif [ "${linuxKernelToInstallVersion}" = "4.19" ]; then 
-        bbrplusKernelVersion="4.19.184-1"
+        bbrplusKernelVersion="4.19.185-1"
 
     elif [ "${linuxKernelToInstallVersion}" = "4.14" ]; then 
-        bbrplusKernelVersion="4.14.228-1"
+        bbrplusKernelVersion="4.14.229-1"
 
     elif [ "${linuxKernelToInstallVersion}" = "4.9" ]; then 
-        bbrplusKernelVersion="4.9.264-1"
+        bbrplusKernelVersion="4.9.265-1"
     fi    
 
 
@@ -654,13 +878,23 @@ function installKernel(){
         installDebianUbuntuKernel
 
 	elif [[ "${osRelease}" == "centos" ]]; then
-        if [ "${linuxKernelToBBRType}" != "bbrplus" ]; then 
-            getLatestCentosKernelVersion
-        fi
+        rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
         
+        if [ "${linuxKernelToBBRType}" = "xanmod" ]; then 
+            red " xanmod 内核不支持 Centos 系统安装"
+            exit 255
+        fi
+
         if [ "${isInstallFromRepo}" = "yes" ]; then 
+            getLatestCentosKernelVersion
             installCentosKernelFromRepo
         else
+            if [ "${linuxKernelToBBRType}" = "bbrplus" ]; then 
+                echo
+            else
+                getLatestCentosKernelVersion "manual"
+            fi
+            
             installCentosKernelManual
         fi
 	fi
@@ -671,8 +905,7 @@ function getLatestCentosKernelVersion(){
 
     # https://stackoverflow.com/questions/4988155/is-there-a-bash-command-that-can-tell-the-size-of-a-shell-variable
 
-    elrepo_kernel_version_lt_array=($(wget -qO- https://elrepo.org/linux/kernel/el8/x86_64/RPMS/ | awk -F'\"kernel-lt-' '/kernel-lt-[4-9]./{print $2}' | cut -d- -f1 | sort -V))
-    elrepo_kernel_version_ml_array=($(wget -qO- https://elrepo.org/linux/kernel/el8/x86_64/RPMS/ | awk -F'\"kernel-ml-' '/kernel-ml-[4-9]./{print $2}' | cut -d- -f1 | sort -V))
+    elrepo_kernel_version_lt_array=($(wget -qO- https://elrepo.org/linux/kernel/el8/x86_64/RPMS | awk -F'\"kernel-lt-' '/>kernel-lt-[4-9]./{print $2}' | cut -d- -f1 | sort -V))
 
     # echo ${elrepo_kernel_version_lt_array[@]}
 
@@ -685,11 +918,39 @@ function getLatestCentosKernelVersion(){
         green "Centos elrepo 源的最新的Linux 内核 kernel-lt 版本号为 ${elrepo_kernel_version_lt}" 
     fi
 
-    if [ ${#elrepo_kernel_version_ml_array[@]} -eq 0 ]; then
-        red " 无法获取到 Centos elrepo 源的最新的Linux 内核 kernel-ml 版本号 "
+    if [ -z $1 ]; then
+        elrepo_kernel_version_ml_array=($(wget -qO- https://elrepo.org/linux/kernel/el8/x86_64/RPMS | awk -F'>kernel-ml-' '/>kernel-ml-[4-9]./{print $2}' | cut -d- -f1 | sort -V))
+        
+        if [ ${#elrepo_kernel_version_ml_array[@]} -eq 0 ]; then
+            red " 无法获取到 Centos elrepo 源的最新的Linux 内核 kernel-ml 版本号 "
+        else
+            elrepo_kernel_version_ml=${elrepo_kernel_version_ml_array[-1]}
+            green "Centos elrepo 源的最新的Linux 内核 kernel-ml 版本号为 ${elrepo_kernel_version_ml}" 
+        fi
     else
-        elrepo_kernel_version_ml=${elrepo_kernel_version_ml_array[-1]}
-        green "Centos elrepo 源的最新的Linux 内核 kernel-ml 版本号为 ${elrepo_kernel_version_ml}" 
+        elrepo_kernel_version_ml2_array=($(wget -qO- https://fr1.teddyvps.com/kernel/el8 | awk -F'>kernel-ml-' '/>kernel-ml-[4-9]./{print $2}' | cut -d- -f1 | sort -V))
+       
+        if [ ${#elrepo_kernel_version_ml2_array[@]} -eq 0 ]; then
+            red " 无法获取到由 Teddysun 编译的 Centos 最新的Linux 5.10 内核 kernel-ml 版本号 "
+        else
+            for ver in ${elrepo_kernel_version_ml2_array[@]}; do
+                
+                if [[ ${ver} == *"5.10"* ]]; then
+                    # echo "符合所选版本的Linux 内核版本: ${ver}"
+                    elrepo_kernel_version_ml_Teddysun510=${ver}
+                fi
+
+                if [[ ${ver} == *"5.11"* ]]; then
+                    # echo "符合所选版本的Linux 内核版本: ${ver}"
+                    elrepo_kernel_version_ml_Teddysun511=${ver}
+                fi
+            done
+
+            elrepo_kernel_version_ml_TeddysunLatest=${elrepo_kernel_version_ml2_array[-1]}
+            green "Centos elrepo 源的最新的Linux 内核 kernel-ml 版本号为 ${elrepo_kernel_version_ml_TeddysunLatest}" 
+            green "由 Teddysun 编译的 Centos 最新的Linux 5.10 内核 kernel-ml 版本号为 ${elrepo_kernel_version_ml_Teddysun510}" 
+            
+        fi
     fi
     echo
 }
@@ -718,39 +979,36 @@ function installCentosKernelFromRepo(){
         fi
         
         linuxKernelToInstallVersionFull=${elrepo_kernel_version}
-
+        
         if [ "${osReleaseVersionNo}" -eq 7 ]; then
             # https://computingforgeeks.com/install-linux-kernel-5-on-centos-7/
 
             # https://elrepo.org/linux/kernel/
             # https://elrepo.org/linux/kernel/el7/x86_64/RPMS/
             
-            rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
             ${sudoCmd} yum install -y yum-plugin-fastestmirror 
             ${sudoCmd} yum install -y https://www.elrepo.org/elrepo-release-7.el7.elrepo.noarch.rpm
-
-            removeCentosKernelMulti
-            listAvailableLinuxKernel
-
-            ${sudoCmd} yum -y --enablerepo=elrepo-kernel install ${elrepo_kernel_name}
-            ${sudoCmd} yum -y --enablerepo=elrepo-kernel install ${elrepo_kernel_name}-{devel,headers,tools,tools-libs}
-            
+   
         elif [ "${osReleaseVersionNo}" -eq 8 ]; then
             # https://elrepo.org/linux/kernel/el8/x86_64/RPMS/
-            rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+            
             ${sudoCmd} yum install -y yum-plugin-fastestmirror 
             ${sudoCmd} yum install -y https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
 
-            removeCentosKernelMulti
-            listAvailableLinuxKernel
-
-            ${sudoCmd} yum -y --enablerepo=elrepo-kernel install ${elrepo_kernel_name}
-            ${sudoCmd} yum -y --enablerepo=elrepo-kernel install ${elrepo_kernel_name}-{devel,headers,tools,tools-libs}
         else
             green " =================================================="
             red "    不支持 Centos 7和8 以外的其他版本 安装 linux 内核"
             green " =================================================="
+            exit 255
         fi
+
+        removeCentosKernelMulti
+        listAvailableLinuxKernel
+        echo
+        green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+        echo
+        ${sudoCmd} yum -y --enablerepo=elrepo-kernel install ${elrepo_kernel_name}
+        ${sudoCmd} yum -y --enablerepo=elrepo-kernel install ${elrepo_kernel_name}-{devel,headers,tools,tools-libs}
 
         green " =================================================="
         green "    安装 linux 内核 ${linuxKernelToInstallVersionFull} 成功! "
@@ -764,7 +1022,6 @@ function installCentosKernelFromRepo(){
         listInstalledLinuxKernel
         rebootSystem
     fi
-
 }
 
 
@@ -814,16 +1071,33 @@ function installCentosKernelManual(){
             # https://elrepo.org/linux/kernel/el7/x86_64/RPMS/kernel-lt-5.4.105-1.el7.elrepo.x86_64.rpm
             # https://elrepo.org/linux/kernel/el7/x86_64/RPMS/kernel-lt-tools-5.4.109-1.el7.elrepo.x86_64.rpm
             # https://elrepo.org/linux/kernel/el7/x86_64/RPMS/kernel-lt-tools-libs-5.4.109-1.el7.elrepo.x86_64.rpm
-        else
+
+        elif [ "${linuxKernelToInstallVersion}" = "5.10" ]; then 
             elrepo_kernel_name="kernel-ml"
-            elrepo_kernel_version="5.10.28"
+            elrepo_kernel_version=${elrepo_kernel_version_ml_Teddysun510}
             elrepo_kernel_filename=""
             ELREPODownloadUrl="https://dl.lamp.sh/kernel/el${osReleaseVersionNo}"
 
-             # https://dl.lamp.sh/kernel/el7/kernel-ml-5.10.23-1.el7.x86_64.rpm
-             # https://dl.lamp.sh/kernel/el8/kernel-ml-5.10.27-1.el8.x86_64.rpm
-             # https://dl.lamp.sh/kernel/el8/kernel-ml-5.10.27-1.el8.x86_64.rpm
+            # https://dl.lamp.sh/kernel/el7/kernel-ml-5.10.23-1.el7.x86_64.rpm
+            # https://dl.lamp.sh/kernel/el7/kernel-ml-5.10.37-1.el7.x86_64.rpm
+            # https://dl.lamp.sh/kernel/el8/kernel-ml-5.10.27-1.el8.x86_64.rpm
+            # https://dl.lamp.sh/kernel/el8/kernel-ml-5.10.27-1.el8.x86_64.rpm
 
+        elif [ "${linuxKernelToInstallVersion}" = "5.11" ]; then 
+            elrepo_kernel_name="kernel-ml"
+            elrepo_kernel_version=${elrepo_kernel_version_ml_Teddysun511}
+            elrepo_kernel_filename="elrepo."
+            ELREPODownloadUrl="https://fr1.teddyvps.com/kernel/el${osReleaseVersionNo}"       
+
+            # https://fr1.teddyvps.com/kernel/el8/kernel-ml-devel-5.11.13-1.el8.elrepo.x86_64.rpm 
+
+        elif [ "${linuxKernelToInstallVersion}" = "5.12" ]; then 
+            elrepo_kernel_name="kernel-ml"
+            elrepo_kernel_version=${elrepo_kernel_version_ml_TeddysunLatest}
+            elrepo_kernel_filename="elrepo."
+            ELREPODownloadUrl="https://fr1.teddyvps.com/kernel/el${osReleaseVersionNo}"       
+
+            # https://fr1.teddyvps.com/kernel/el7/kernel-ml-5.12.4-1.el7.elrepo.x86_64.rpm
         fi
 
         linuxKernelToInstallVersionFull=${elrepo_kernel_version}
@@ -848,7 +1122,14 @@ function installCentosKernelManual(){
         fi
 
         removeCentosKernelMulti
-        rpm -ivh --force --nodeps ${elrepo_kernel_name}-core-${elrepo_kernel_version}-*.rpm
+        echo
+        green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+        echo        
+
+        if [ "${osReleaseVersionNo}" -eq 8 ]; then
+            rpm -ivh --force --nodeps ${elrepo_kernel_name}-core-${elrepo_kernel_version}-*.rpm
+        fi
+        
         rpm -ivh --force --nodeps ${elrepo_kernel_name}-${elrepo_kernel_version}-*.rpm
         rpm -ivh --force --nodeps ${elrepo_kernel_name}-*.rpm
 
@@ -916,6 +1197,9 @@ function installCentosKernelManual(){
         fi
 
         removeCentosKernelMulti
+        echo
+        green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+        echo        
         rpm -ivh --force --nodeps ${altarch_kernel_name}-core-${altarch_kernel_version}*
         rpm -ivh --force --nodeps ${altarch_kernel_name}-*
         # yum install -y kernel-*
@@ -938,6 +1222,9 @@ function installCentosKernelManual(){
             downloadFile ${bbrplusDownloadUrl}/kernel-headers-${linuxKernelToInstallVersionFull}.rpm
 
             removeCentosKernelMulti
+            echo
+            green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+            echo            
             rpm -ivh --force --nodeps kernel-${linuxKernelToInstallVersionFull}.rpm
             rpm -ivh --force --nodeps kernel-headers-${linuxKernelToInstallVersionFull}.rpm
         else 
@@ -953,10 +1240,7 @@ function installCentosKernelManual(){
         mkdir -p ${userHomePath}/${linuxKernelToInstallVersionFull}
         cd ${userHomePath}/${linuxKernelToInstallVersionFull}
 
-        if [ "${linuxKernelToInstallVersion}" = "5.9" ]; then 
-            bbrplusDownloadUrl="https://github.com/UJX6N/bbrplus-${linuxKernelToInstallVersion}/releases/download/5.9.16-bbrplus-final-update-for-5.9"
-
-        elif [ "${linuxKernelToInstallVersion}" = "4.14" ]; then 
+        if [ "${linuxKernelToInstallVersion}" = "4.14" ]; then 
             bbrplusDownloadUrl="https://github.com/UJX6N/bbrplus/releases/download/${linuxKernelToInstallVersionFull}"
 
         else
@@ -971,8 +1255,9 @@ function installCentosKernelManual(){
             # https://github.com/UJX6N/bbrplus-5.10/releases/download/5.10.27-bbrplus/CentOS-7_Optional_kernel-bbrplus-devel-5.10.27-1.bbrplus.el7.x86_64.rpm
             # https://github.com/UJX6N/bbrplus-5.10/releases/download/5.10.27-bbrplus/CentOS-7_Optional_kernel-bbrplus-headers-5.10.27-1.bbrplus.el7.x86_64.rpm
             
-
-            # https://github.com/UJX6N/bbrplus-5.9/releases/download/5.9.16-bbrplus-final-update-for-5.9/CentOS-7_Required_kernel-bbrplus-5.9.16-5.bbrplus.el7.x86_64.rpm
+            
+            # https://github.com/UJX6N/bbrplus-5.9/releases/download/5.9.16-bbrplus/CentOS-7_Required_kernel-bbrplus-5.9.16-1.bbrplus.el7.x86_64.rpm
+            # https://github.com/UJX6N/bbrplus-5.9/releases/download/5.9.16-bbrplus/CentOS-7_Optional_kernel-bbrplus-devel-5.9.16-1.bbrplus.el7.x86_64.rpm
             # https://github.com/UJX6N/bbrplus-5.4/releases/download/5.4.109-bbrplus/CentOS-7_Required_kernel-bbrplus-5.4.109-1.bbrplus.el7.x86_64.rpm
             # https://github.com/UJX6N/bbrplus-4.19/releases/download/4.19.184-bbrplus/CentOS-7_Required_kernel-bbrplus-4.19.184-1.bbrplus.el7.x86_64.rpm
             # https://github.com/UJX6N/bbrplus/releases/download/4.14.228-bbrplus/CentOS-7_Required_kernel-bbrplus-4.14.228-1.bbrplus.el7.x86_64.rpm
@@ -983,6 +1268,9 @@ function installCentosKernelManual(){
             downloadFile ${bbrplusDownloadUrl}/CentOS-7_Optional_kernel-bbrplus-headers-${bbrplusKernelVersion}.bbrplus.el7.x86_64.rpm
 
             removeCentosKernelMulti
+            echo
+            green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+            echo                
             rpm -ivh --force --nodeps CentOS-7_Required_kernel-bbrplus-${bbrplusKernelVersion}.bbrplus.el7.x86_64.rpm
             rpm -ivh --force --nodeps *.rpm
         else 
@@ -1010,14 +1298,15 @@ function installCentosKernelManual(){
             downloadFile ${bbrplusDownloadUrl}/CentOS-8_Optional_kernel-bbrplus-modules-extra-${bbrplusKernelVersion}.bbrplus.el8.x86_64.rpm
 
             removeCentosKernelMulti
+            echo
+            green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+            echo                
             rpm -ivh --force --nodeps CentOS-8_Required_kernel-bbrplus-core-${bbrplusKernelVersion}.bbrplus.el8.x86_64.rpm
             rpm -ivh --force --nodeps *.rpm
 
         fi
 
     fi;
-
-
 
     updateGrubConfig
 
@@ -1028,7 +1317,6 @@ function installCentosKernelManual(){
     echo
 
     showLinuxKernelInfo
-    listInstalledLinuxKernel
     removeCentosKernelMulti "kernel"
     listInstalledLinuxKernel
     rebootSystem
@@ -1037,7 +1325,7 @@ function installCentosKernelManual(){
 
 
 function removeCentosKernelMulti(){
-    echo
+    listInstalledLinuxKernel
 
     if [ -z $1 ]; then
         red " 开始准备删除 kernel-header kernel-devel kernel-tools kernel-tools-libs 内核, 建议删除 "
@@ -1048,6 +1336,8 @@ function removeCentosKernelMulti(){
     red " 注意: 删除内核有风险, 可能会导致VPS无法启动, 请先做好备份! "
     read -p "是否删除内核? 直接回车默认删除内核, 请输入[Y/n]:" isContinueDelKernelInput
 	isContinueDelKernelInput=${isContinueDelKernelInput:-Y}
+    
+    echo
 
 	if [[ $isContinueDelKernelInput == [Yy] ]]; then
 
@@ -1071,7 +1361,7 @@ function removeCentosKernelMulti(){
             removeCentosKernel "kernel"  
         fi 
 	fi
-
+    echo
 }
 
 function removeCentosKernel(){
@@ -1092,10 +1382,8 @@ function removeCentosKernel(){
     removeKernelNameText=$1
     grepExcludelinuxKernelVersion=$(echo ${linuxKernelToInstallVersionFull} | cut -d- -f1)
 
-    echo
-    green "===== 准备开始删除旧内核 ${removeKernelNameText} ${osKernelVersionBackup}, 当前要安装新内核版本为: ${grepExcludelinuxKernelVersion}"
-
-    echo "rpm -qa | grep ${removeKernelNameText} | grep -v ${grepExcludelinuxKernelVersion} | grep -v noarch | wc -l"
+    
+    # echo "rpm -qa | grep ${removeKernelNameText} | grep -v ${grepExcludelinuxKernelVersion} | grep -v noarch | wc -l"
     rpmOldKernelNumber=$(rpm -qa | grep "${removeKernelNameText}" | grep -v "${grepExcludelinuxKernelVersion}" | grep -v "noarch" | wc -l)
     rpmOLdKernelNameList=$(rpm -qa | grep "${removeKernelNameText}" | grep -v "${grepExcludelinuxKernelVersion}" | grep -v "noarch")
     # echo "${rpmOLdKernelNameList}"
@@ -1104,7 +1392,8 @@ function removeCentosKernel(){
 
 
     if [ "${rpmOldKernelNumber}" -gt "0" ]; then
-        
+
+        yellow "========== 准备开始删除旧内核 ${removeKernelNameText} ${osKernelVersionBackup}, 当前要安装新内核版本为: ${grepExcludelinuxKernelVersion}"
         red " 当前系统的旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 有 ${rpmOldKernelNumber} 个需要删除"
         echo
         for((integer = 1; integer <= ${rpmOldKernelNumber}; integer++)); do   
@@ -1114,9 +1403,9 @@ function removeCentosKernel(){
             green " 已卸载第 ${integer} 个内核 ${rpmOLdKernelName}"
             echo
         done
-        green "===== 共 ${rpmOldKernelNumber} 个旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 已经卸载完成"
+        yellow "========== 共 ${rpmOldKernelNumber} 个旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 已经卸载完成"
     else
-        red " 当前需要卸载的系统旧内核 ${removeKernelNameText} 数量为0 !" 
+        red " 当前需要卸载的系统旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 数量为0 !" 
     fi
 
     echo
@@ -1221,7 +1510,6 @@ function getLatestUbuntuKernelVersion(){
     echo
     green "Ubuntu mainline 最新的Linux 内核 kernel 版本号为 ${ubuntuKernelLatestVersion}" 
     
-
     for ver in ${ubuntuKernelLatestVersionArray[@]}; do
         
         if [[ ${ver} == *"${linuxKernelToInstallVersion}"* ]]; then
@@ -1254,40 +1542,67 @@ function installDebianUbuntuKernel(){
     
     if [ "${isInstallFromRepo}" = "yes" ]; then 
 
-        debianKernelVersion="5.10.0"
+        if [ "${linuxKernelToBBRType}" = "xanmod" ]; then 
 
-        green " =================================================="
-        green "    开始通过 Debian 官方源安装 linux 内核 ${debianKernelVersion}"
-        green " =================================================="
+            green " =================================================="
+            green "    开始通过 XanMod 官方源安装 linux 内核 ${linuxKernelToInstallVersion}"
+            green " =================================================="
 
-        if [ "${osKernelVersionBackup}" = "${debianKernelVersion}" ]; then 
-            red "当前系统内核版本已经是 ${osKernelVersionBackup} 无需安装! "
-            promptContinueOpeartion
+            # https://xanmod.org/
+
+            echo 'deb http://deb.xanmod.org releases main' > /etc/apt/sources.list.d/xanmod-kernel.list
+            wget -qO - https://dl.xanmod.org/gpg.key | sudo apt-key --keyring /etc/apt/trusted.gpg.d/xanmod-kernel.gpg add -
+            ${sudoCmd} apt update
+
+            listAvailableLinuxKernel "xanmod"
+
+            echo
+            green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
+            echo
+
+            if [ "${linuxKernelToInstallVersion}" = "5.11" ]; then 
+                ${sudoCmd} apt install -y linux-xanmod
+            elif [ "${linuxKernelToInstallVersion}" = "5.10" ]; then 
+                ${sudoCmd} apt install -y linux-xanmod-lts
+            fi
+
+            rebootSystem
+        else
+
+            debianKernelVersion="5.10.0"
+
+            green " =================================================="
+            green "    开始通过 Debian 官方源安装 linux 内核 ${debianKernelVersion}"
+            green " =================================================="
+
+            if [ "${osKernelVersionBackup}" = "${debianKernelVersion}" ]; then 
+                red "当前系统内核版本已经是 ${osKernelVersionBackup} 无需安装! "
+                promptContinueOpeartion
+            fi
+
+            linuxKernelToInstallVersionFull=${debianKernelVersion}
+
+            echo "deb http://deb.debian.org/debian buster-backports main contrib non-free" > /etc/apt/sources.list.d/buster-backports.list
+            echo "deb-src http://deb.debian.org/debian buster-backports main contrib non-free" >> /etc/apt/sources.list.d/buster-backports.list
+            ${sudoCmd} apt update
+
+            listAvailableLinuxKernel
+            
+            ${sudoCmd} apt install -y -t buster-backports linux-image-amd64
+            ${sudoCmd} apt install -y -t buster-backports firmware-linux firmware-linux-nonfree
+
+            echo
+            echo "dpkg --get-selections | grep linux-image-${debianKernelVersion} | awk '/linux-image-[4-9]./{print \$1}' | awk -F'linux-image-' '{print \$2}' "
+            debianKernelVersionPackageName=$(dpkg --get-selections | grep "${debianKernelVersion}" | awk '/linux-image-[4-9]./{print $1}' | awk -F'linux-image-' '{print $2}')
+            
+            echo
+            green " Debian 官方源安装 linux 内核版本: ${debianKernelVersionPackageName}"
+            green " 开始安装 linux-headers  命令为:  apt install -y linux-headers-${debianKernelVersionPackageName}"
+            echo
+            ${sudoCmd} apt install -y linux-headers-${debianKernelVersionPackageName}
+            # ${sudoCmd} apt-get -y dist-upgrade
+
         fi
-
-        linuxKernelToInstallVersionFull=${debianKernelVersion}
-
-        echo "deb http://deb.debian.org/debian buster-backports main contrib non-free" > /etc/apt/sources.list.d/buster-backports.list
-        echo "deb-src http://deb.debian.org/debian buster-backports main contrib non-free" > /etc/apt/sources.list.d/buster-backports.list
-        ${sudoCmd} apt update
-
-
-        listAvailableLinuxKernel
-        
-        ${sudoCmd} apt install -y -t buster-backports linux-image-amd64
-        ${sudoCmd} apt install -y -t buster-backports firmware-linux firmware-linux-nonfree
-
-        echo
-        echo "dpkg --get-selections | grep linux-image-${debianKernelVersion} | awk '/linux-image-[4-9]./{print \$1}' | awk -F'linux-image-' '{print \$2}' "
-        debianKernelVersionPackageName=$(dpkg --get-selections | grep "${debianKernelVersion}" | awk '/linux-image-[4-9]./{print $1}' | awk -F'linux-image-' '{print $2}')
-        
-        echo
-        green " Debian 官方源安装 linux 内核版本: ${debianKernelVersionPackageName}"
-        green " 开始安装 linux-headers  命令为:  apt install -y linux-headers-${debianKernelVersionPackageName}"
-        echo
-        ${sudoCmd} apt install -y linux-headers-${debianKernelVersionPackageName}
-        # ${sudoCmd} apt-get -y dist-upgrade
-        
 
     else
 
@@ -1366,12 +1681,7 @@ function installDebianUbuntuKernel(){
             mkdir -p ${userHomePath}/${linuxKernelToInstallVersionFull}
             cd ${userHomePath}/${linuxKernelToInstallVersionFull}
 
-            if [ "${linuxKernelToInstallVersion}" = "5.9" ]; then 
-                bbrplusDownloadUrl="https://github.com/UJX6N/bbrplus-${linuxKernelToInstallVersion}/releases/download/5.9.16-bbrplus-final-update-for-5.9"
-                downloadFile ${bbrplusDownloadUrl}/Debian-Ubuntu_Required_linux-image-${linuxKernelToInstallSubVersion}-bbrplus_5_amd64.deb
-                downloadFile ${bbrplusDownloadUrl}/Debian-Ubuntu_Required_linux-headers-${linuxKernelToInstallSubVersion}-bbrplus_5_amd64.deb    
-
-            elif [ "${linuxKernelToInstallVersion}" = "4.14" ]; then 
+            if [ "${linuxKernelToInstallVersion}" = "4.14" ]; then 
                 bbrplusDownloadUrl="https://github.com/UJX6N/bbrplus/releases/download/${linuxKernelToInstallVersionFull}"
                 downloadFile ${bbrplusDownloadUrl}/Debian-Ubuntu_Required_linux-image-${linuxKernelToInstallSubVersion}-bbrplus_${linuxKernelToInstallSubVersion}-bbrplus-1_amd64.deb
                 downloadFile ${bbrplusDownloadUrl}/Debian-Ubuntu_Required_linux-headers-${linuxKernelToInstallSubVersion}-bbrplus_${linuxKernelToInstallSubVersion}-bbrplus-1_amd64.deb
@@ -1380,24 +1690,22 @@ function installDebianUbuntuKernel(){
 
                 downloadFile ${bbrplusDownloadUrl}/Debian-Ubuntu_Required_linux-image-${linuxKernelToInstallSubVersion}-bbrplus_${linuxKernelToInstallSubVersion}-bbrplus-1_amd64.deb
                 downloadFile ${bbrplusDownloadUrl}/Debian-Ubuntu_Required_linux-headers-${linuxKernelToInstallSubVersion}-bbrplus_${linuxKernelToInstallSubVersion}-bbrplus-1_amd64.deb
-
             fi
     
             # https://github.com/UJX6N/bbrplus-5.10/releases/download/5.10.27-bbrplus/Debian-Ubuntu_Required_linux-image-5.10.27-bbrplus_5.10.27-bbrplus-1_amd64.deb
             # https://github.com/UJX6N/bbrplus-5.10/releases/download/5.10.27-bbrplus/Debian-Ubuntu_Required_linux-headers-5.10.27-bbrplus_5.10.27-bbrplus-1_amd64.deb
 
-            # https://github.com/UJX6N/bbrplus-5.9/releases/download/5.9.16-bbrplus-final-update-for-5.9/Debian-Ubuntu_Required_linux-image-5.9.16-bbrplus_5_amd64.deb
+            # https://github.com/UJX6N/bbrplus-5.9/releases/download/5.9.16-bbrplus/Debian-Ubuntu_Required_linux-image-5.9.16-bbrplus_5.9.16-bbrplus-1_amd64.deb
             # https://github.com/UJX6N/bbrplus-5.4/releases/download/5.4.109-bbrplus/Debian-Ubuntu_Required_linux-image-5.4.109-bbrplus_5.4.109-bbrplus-1_amd64.deb
             # https://github.com/UJX6N/bbrplus-4.19/releases/download/4.19.184-bbrplus/Debian-Ubuntu_Required_linux-image-4.19.184-bbrplus_4.19.184-bbrplus-1_amd64.deb
 
         fi
 
 
-         
+        removeDebianKernelMulti
+        echo
         green " 开始安装 linux 内核版本: ${linuxKernelToInstallVersionFull}"
         echo
-
-        removeDebianKernelMulti
         ${sudoCmd} dpkg -i *.deb 
 
         updateGrubConfig
@@ -1412,7 +1720,6 @@ function installDebianUbuntuKernel(){
     echo
 
     showLinuxKernelInfo
-    listInstalledLinuxKernel
     removeDebianKernelMulti "linux-image"
     listInstalledLinuxKernel
     rebootSystem
@@ -1423,8 +1730,8 @@ function installDebianUbuntuKernel(){
 
 
 function removeDebianKernelMulti(){
+    listInstalledLinuxKernel
 
-    echo
     if [ -z $1 ]; then
         red " 开始准备删除 linux-headers linux-modules 内核, 建议删除 "
     else
@@ -1434,20 +1741,26 @@ function removeDebianKernelMulti(){
     red " 注意: 删除内核有风险, 可能会导致VPS无法启动, 请先做好备份! "
     read -p "是否删除内核? 直接回车默认删除内核, 请输入[Y/n]:" isContinueDelKernelInput
 	isContinueDelKernelInput=${isContinueDelKernelInput:-Y}
-
+    echo
+    
 	if [[ $isContinueDelKernelInput == [Yy] ]]; then
 
         if [ -z $1 ]; then
+            removeDebianKernel "linux-modules-extra"
             removeDebianKernel "linux-headers"
-            removeDebianKernel "linux-modules"
             # removeDebianKernel "linux-kbuild"
             # removeDebianKernel "linux-compiler"
             # removeDebianKernel "linux-libc"
         else
             removeDebianKernel "linux-image"
+            removeDebianKernel "linux-modules-extra"
+            removeDebianKernel "linux-modules"
+            removeDebianKernel "linux-headers"
+            # ${sudoCmd} apt -y --purge autoremove
         fi
 
     fi
+    echo
 }
 
 function removeDebianKernel(){
@@ -1456,10 +1769,8 @@ function removeDebianKernel(){
     removeKernelNameText=$1
     grepExcludelinuxKernelVersion=$(echo ${linuxKernelToInstallVersionFull} | cut -d- -f1)
 
-    echo
-    green "===== 准备开始删除旧内核 ${removeKernelNameText} ${osKernelVersionBackup}, 当前要安装新内核版本为: ${grepExcludelinuxKernelVersion}"
-
-    echo "dpkg --get-selections | grep ${removeKernelNameText} | grep -Ev '${grepExcludelinuxKernelVersion}|${removeKernelNameText}-amd64' | awk '{print \$1}' "
+    
+    # echo "dpkg --get-selections | grep ${removeKernelNameText} | grep -Ev '${grepExcludelinuxKernelVersion}|${removeKernelNameText}-amd64' | awk '{print \$1}' "
     rpmOldKernelNumber=$(dpkg --get-selections | grep "${removeKernelNameText}" | grep -Ev "${grepExcludelinuxKernelVersion}|${removeKernelNameText}-amd64" | wc -l)
     rpmOLdKernelNameList=$(dpkg --get-selections | grep "${removeKernelNameText}" | grep -Ev "${grepExcludelinuxKernelVersion}|${removeKernelNameText}-amd64" | awk '{print $1}' )
     # echo "$rpmOLdKernelNameList"
@@ -1469,7 +1780,7 @@ function removeDebianKernel(){
 
     
     if [ "${rpmOldKernelNumber}" -gt "0" ]; then
-    
+        yellow "========== 准备开始删除旧内核 ${removeKernelNameText} ${osKernelVersionBackup}, 当前要安装新内核版本为: ${grepExcludelinuxKernelVersion}"
         red " 当前系统的旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 有 ${rpmOldKernelNumber} 个需要删除"
         echo
         for((integer = 1; integer <= ${rpmOldKernelNumber}; integer++)); do   
@@ -1479,14 +1790,12 @@ function removeDebianKernel(){
             green " 已卸载第 ${integer} 个内核 ${rpmOLdKernelName}"
             echo
         done
-        green "===== 共 ${rpmOldKernelNumber} 个旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 已经卸载完成"
+        yellow "========== 共 ${rpmOldKernelNumber} 个旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 已经卸载完成"
     else
-        red " 当前需要卸载的系统旧内核 ${removeKernelNameText} 数量为0 !" 
+        red " 当前需要卸载的系统旧内核 ${removeKernelNameText} ${osKernelVersionBackup} 数量为0 !" 
     fi
-
+    
     echo
-
-    ${sudoCmd} apt -y --purge autoremove
 }
 
 
@@ -1541,9 +1850,9 @@ function getGithubLatestReleaseVersion(){
 versionWgcf="2.2.3"
 downloadFilenameWgcf="wgcf_${versionWgcf}_linux_amd64"
 configWgcfBinPath="/usr/local/bin"
-configWgcfConfigFilePath="${HOME}/wireguard"
-configWgcfAccountFilePath="${configWgcfConfigFilePath}/wgcf-account.toml"
-configWgcfProfileFilePath="${configWgcfConfigFilePath}/wgcf-profile.conf"
+configWgcfConfigFolderPath="${HOME}/wireguard"
+configWgcfAccountFilePath="${configWgcfConfigFolderPath}/wgcf-account.toml"
+configWgcfProfileFilePath="${configWgcfConfigFolderPath}/wgcf-profile.conf"
 configWireGuardConfigFileFolder="/etc/wireguard"
 configWireGuardConfigFilePath="/etc/wireguard/wgcf.conf"
 
@@ -1551,6 +1860,14 @@ function installWireguard(){
 
     versionWgcf=$(getGithubLatestReleaseVersion "ViRb3/wgcf")
     downloadFilenameWgcf="wgcf_${versionWgcf}_linux_amd64"
+
+    if [[ -f "${configWireGuardConfigFilePath}" ]]; then
+        green " =================================================="
+        green "  已安装过 Wireguard, 如需重装 可以选择卸载 Wireguard 后重新安装! "
+        green " =================================================="
+        exit
+    fi
+
 
     green " =================================================="
     green "    开始安装 WireGuard 和 Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} !"
@@ -1583,39 +1900,56 @@ function installWireguard(){
         green " 建议请先用本脚本安装 linux kernel 5.6 以上的内核 !"
 		exit
 	fi
+
     echo
 
     if [[ "${osRelease}" == "debian" || "${osRelease}" == "ubuntu" ]]; then
             ${sudoCmd} apt-get update
-            ${sudoCmd} apt install -y wireguard
+            ${sudoCmd} apt install -y openresolv
+            # ${sudoCmd} apt install -y resolvconf
+            ${sudoCmd} apt install net-tools iproute2 dnsutils
+            echo
+            if [[ ${isKernelBuildInWireGuardModule} == "yes" ]]; then
+                green " 当前系统内核版本高于5.6, 直接安装 wireguard-tools "
+                ${sudoCmd} apt install -y wireguard-tools 
+            else
+                # 安装 wireguard-dkms 后 ubuntu 20 系统 会同时安装 5.4.0-71   内核
+                green " 当前系统内核版本低于5.6,  直接安装 wireguard wireguard"
+                ${sudoCmd} apt install -y wireguard
+                # ${sudoCmd} apt install -y wireguard-tools 
+            fi
 
-            ln -s /usr/bin/resolvectl /usr/local/bin/resolvconf
-
+            # if [[ ! -L "/usr/local/bin/resolvconf" ]]; then
+            #     ln -s /usr/bin/resolvectl /usr/local/bin/resolvconf
+            # fi
+            
             ${sudoCmd} systemctl enable systemd-resolved.service
             ${sudoCmd} systemctl start systemd-resolved.service
 
     elif [[ "${osRelease}" == "centos" ]]; then
-    
+        ${sudoCmd} yum install -y epel-release elrepo-release 
+        ${sudoCmd} yum install -y net-tools
+        ${sudoCmd} yum install -y iproute
+
+        echo
         if [[ ${isKernelBuildInWireGuardModule} == "yes" ]]; then
 
-            green " 当前系统内核版本高于5.6, 直接安装 kmod-wireguard "
+            green " 当前系统内核版本高于5.6, 直接安装 wireguard-tools "
 
             if [ "${osReleaseVersionNo}" -eq 7 ]; then
                 ${sudoCmd} yum install -y yum-plugin-elrepo
             fi
 
-            ${sudoCmd} yum install -y epel-release elrepo-release 
-            ${sudoCmd} yum install -y kmod-wireguard wireguard-tools
+            ${sudoCmd} yum install -y wireguard-tools
         else 
             
             if [ "${osReleaseVersionNo}" -eq 7 ]; then
                 if [[ ${osKernelVersionBackup} == *"3.10."* ]]; then
                     green " 当前系统内核版本为原版Centos 7 ${osKernelVersionBackup} , 直接安装 kmod-wireguard "
                     ${sudoCmd} yum install -y yum-plugin-elrepo
-                    ${sudoCmd} yum install -y epel-release elrepo-release 
                     ${sudoCmd} yum install -y kmod-wireguard wireguard-tools
                 else
-                    green " 当前系统内核版本低于5.6 , 安装 wireguard-dkms "
+                    green " 当前系统内核版本低于5.6, 安装 wireguard-dkms "
                     ${sudoCmd} yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
                     ${sudoCmd} curl -o /etc/yum.repos.d/jdoss-wireguard-epel-7.repo https://copr.fedorainfracloud.org/coprs/jdoss/wireguard/repo/epel-7/jdoss-wireguard-epel-7.repo
                     ${sudoCmd} yum install -y wireguard-dkms wireguard-tools
@@ -1623,11 +1957,9 @@ function installWireguard(){
             else
                 if [[ ${osKernelVersionBackup} == *"4.18."* ]]; then
                     green " 当前系统内核版本为原版Centos 8 ${osKernelVersionBackup} , 直接安装 kmod-wireguard "
-                    ${sudoCmd} yum install -y epel-release elrepo-release 
                     ${sudoCmd} yum install -y kmod-wireguard wireguard-tools
                 else
-                    green " 当前系统内核版本低于5.6 , 安装 wireguard-dkms "
-                    ${sudoCmd} yum install -y epel-release
+                    green " 当前系统内核版本低于5.6, 安装 wireguard-dkms "
                     ${sudoCmd} yum config-manager --set-enabled PowerTools
                     ${sudoCmd} yum copr enable jdoss/wireguard
                     ${sudoCmd} yum install -y wireguard-dkms wireguard-tools
@@ -1643,64 +1975,51 @@ function installWireguard(){
     green " 开始安装 Cloudflare Warp 命令行工具 Wgcf "
     echo
 
-    mkdir -p ${configWgcfConfigFilePath}
+    mkdir -p ${configWgcfConfigFolderPath}
     mkdir -p ${configWgcfBinPath}
     mkdir -p ${configWireGuardConfigFileFolder}
 
-    cd ${configWgcfConfigFilePath}
+    cd ${configWgcfConfigFolderPath}
 
     # https://github.com/ViRb3/wgcf/releases/download/v2.2.2/wgcf_2.2.2_linux_amd64
-    wget -O ${configWgcfConfigFilePath}/wgcf --no-check-certificate "https://github.com/ViRb3/wgcf/releases/download/v${versionWgcf}/${downloadFilenameWgcf}"
+    wget -O ${configWgcfConfigFolderPath}/wgcf --no-check-certificate "https://github.com/ViRb3/wgcf/releases/download/v${versionWgcf}/${downloadFilenameWgcf}"
     
 
-    if [[ -f ${configWgcfConfigFilePath}/wgcf ]]; then
-        ${sudoCmd} chmod +x ${configWgcfConfigFilePath}/wgcf
-        cp ${configWgcfConfigFilePath}/wgcf ${configWgcfBinPath}
-
+    if [[ -f ${configWgcfConfigFolderPath}/wgcf ]]; then
         green " Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} 下载成功!"
         echo
-        # ${configWgcfConfigFilePath}/wgcf register --config "${configWgcfAccountFilePath}"
-
-        ${configWgcfConfigFilePath}/wgcf register 
-        ${configWgcfConfigFilePath}/wgcf generate 
-
-        sed -i '/AllowedIPs = 0\.0\.0\.0/d' ${configWgcfProfileFilePath}
-        sed -i 's/engage\.cloudflareclient\.com/162\.159\.192\.1/g'  ${configWgcfProfileFilePath}
-
     else
         red "  Wgcf ${versionWgcf} 下载失败!"
         exit 255
     fi
 
+    ${sudoCmd} chmod +x ${configWgcfConfigFolderPath}/wgcf
+    cp ${configWgcfConfigFolderPath}/wgcf ${configWgcfBinPath}
+    
+    # ${configWgcfConfigFolderPath}/wgcf register --config "${configWgcfAccountFilePath}"
 
-    echo "nameserver 8.8.8.8" >>  /etc/resolv.conf
-    # echo "nameserver 8.8.4.4" >>  /etc/resolv.conf
-    # echo "nameserver 1.1.1.1" >>  /etc/resolv.conf
-    # echo "nameserver 9.9.9.9" >>  /etc/resolv.conf
-    # echo "nameserver 9.9.9.10" >>  /etc/resolv.conf
-
+    ${configWgcfConfigFolderPath}/wgcf register 
+    ${configWgcfConfigFolderPath}/wgcf generate 
 
     cp ${configWgcfProfileFilePath} ${configWireGuardConfigFilePath}
 
+    enableWireguardIPV6OrIPV4
+
     echo 
-    green "  开始启动 Wireguard, 运行命令: wg-quick up wgcf"
+    green " 开始临时启动 Wireguard, 用于测试是否启动正常, 运行命令: wg-quick up wgcf"
     ${sudoCmd} wg-quick up wgcf
 
     echo 
-    green "  开始验证 Wireguard 是否启动正常 检测是否使用 CLOUDFLARE 的 ipv6 访问 !"
+    green " 开始验证 Wireguard 是否启动正常, 检测是否使用 CLOUDFLARE 的 ipv6 访问 !"
     echo
     echo "curl -6 ip.p3terx.com"
     curl -6 ip.p3terx.com 
     echo
-    
     isWireguardIpv6Working=$(curl -6 ip.p3terx.com | grep CLOUDFLARENET )
-    sleep 3
-    ${sudoCmd} wg-quick down wgcf
+    echo
 
-    
 	if [[ -n "$isWireguardIpv6Working" ]]; then	
-		green " Wireguard 启动正常! "
-        echo
+		green " Wireguard 启动正常, 已成功通过 CLOUDFLARE Warp 提供的 IPv6 访问网络! "
 	else 
 		green " ================================================== "
 		red " Wireguard 通过 curl -6 ip.p3terx.com, 检测使用CLOUDFLARENET的IPV6 访问失败"
@@ -1712,6 +2031,10 @@ function installWireguard(){
 		green " ================================================== "
 	fi
 
+    echo
+    green " 关闭临时启动用于测试的 Wireguard, 运行命令: wg-quick down wgcf "
+    ${sudoCmd} wg-quick down wgcf
+    echo
 
     ${sudoCmd} systemctl daemon-reload
     
@@ -1721,25 +2044,171 @@ function installWireguard(){
     # 启用守护进程
     ${sudoCmd} systemctl start wg-quick@wgcf
 
+    checkWireguardBootStatus
 
+    echo
     green " ================================================== "
     green "  Wireguard 和 Cloudflare Warp 命令行工具 Wgcf ${versionWgcf} 安装成功 !"
+    green "  Cloudflare Warp 申请的账户配置文件路径: ${configWgcfAccountFilePath} "
+    green "  Cloudflare Warp 生成的 Wireguard 配置文件路径: ${configWireGuardConfigFilePath} "
+    echo
     green "  Wireguard 停止命令: systemctl stop wg-quick@wgcf  启动命令: systemctl start wg-quick@wgcf  重启命令: systemctl restart wg-quick@wgcf"
-    green "  Wireguard 查看日志: journalctl -n 50 -u wg-quick@wgcf 查看运行状态: systemctl status wg-quick@wgcf"
-    
-    green "  用本脚本安装v2ray或xray 可以选择是否解除 google 验证码 和 Netflix 的限制 !"
+    green "  Wireguard 查看日志: journalctl -n 50 -u wg-quick@wgcf"
+    green "  Wireguard 查看运行状态: systemctl status wg-quick@wgcf"
+    echo
+    green "  用本脚本安装v2ray或xray 可以选择是否 解锁 Netflix 限制 和 避免弹出 Google reCAPTCHA 人机验证 !"
+    echo
     green "  其他脚本安装的v2ray或xray 请自行替换 v2ray或xray 配置文件!"
+    green "  可参考 如何使用 IPv6 访问 Netflix 的教程 https://ybfl.xyz/111.html 或 https://toutyrater.github.io/app/netflix.html!"
     green " ================================================== "
     
 }
 
+function enableWireguardIPV6OrIPV4(){
+    # https://p3terx.com/archives/use-cloudflare-warp-to-add-extra-ipv4-or-ipv6-network-support-to-vps-servers-for-free.html
+    
+    ${sudoCmd} systemctl stop wg-quick@wgcf
+
+    sed -i '/nameserver 2a00\:1098\:2b\:\:1/d' /etc/resolv.conf
+
+    sed -i '/nameserver 8\.8/d' /etc/resolv.conf
+    sed -i '/nameserver 9\.9/d' /etc/resolv.conf
+    sed -i '/nameserver 1\.1\.1\.1/d' /etc/resolv.conf
+
+    echo
+    green " ================================================== "
+    yellow " 请选择为服务器添加 IPv6 网络 还是 IPv4 网络支持: "
+    echo
+    green " 1 添加 IPv6 网络 (用于解锁 Netflix 限制 和避免弹出 Google reCAPTCHA 人机验证)"
+    green " 2 添加 IPv4 网络 (用于给只有 IPv6 的 VPS主机添加 IPv4 网络支持)"
+    echo
+    read -p "请选择添加 IPv6 还是 IPv4 网络支持? 直接回车默认选1 , 请输入[1/2]:" isAddNetworkIPv6Input
+	isAddNetworkIPv6Input=${isAddNetworkIPv6Input:-1}
+
+	if [[ ${isAddNetworkIPv6Input} == [2] ]]; then
+
+        # 为 IPv6 Only 服务器添加 IPv4 网络支持
+
+        sed -i 's/^AllowedIPs = \:\:\/0/# AllowedIPs = \:\:\/0/g' ${configWireGuardConfigFilePath}
+        sed -i 's/# AllowedIPs = 0\.0\.0\.0/AllowedIPs = 0\.0\.0\.0/g' ${configWireGuardConfigFilePath}
+
+        sed -i 's/engage\.cloudflareclient\.com/\[2606\:4700\:d0\:\:a29f\:c001\]/g' ${configWireGuardConfigFilePath}
+        sed -i 's/162\.159\.192\.1/\[2606\:4700\:d0\:\:a29f\:c001\]/g' ${configWireGuardConfigFilePath}
+
+        sed -i 's/^DNS = 1\.1\.1\.1/DNS = 2620:fe\:\:10,2001\:4860\:4860\:\:8888,2606\:4700\:4700\:\:1111/g'  ${configWireGuardConfigFilePath}
+        sed -i 's/^DNS = 8\.8\.8\.8,1\.1\.1\.1,9\.9\.9\.10/DNS = 2620:fe\:\:10,2001\:4860\:4860\:\:8888,2606\:4700\:4700\:\:1111/g'  ${configWireGuardConfigFilePath}
+        
+        echo "nameserver 2a00:1098:2b::1" >> /etc/resolv.conf
+        
+        echo
+        green " Wireguard 已成功切换到 对VPS服务器的 IPv4 网络支持"
+
+    else
+
+        # 为 IPv4 Only 服务器添加 IPv6 网络支持
+        sed -i 's/^AllowedIPs = 0\.0\.0\.0/# AllowedIPs = 0\.0\.0\.0/g' ${configWireGuardConfigFilePath}
+        sed -i 's/# AllowedIPs = \:\:\/0/AllowedIPs = \:\:\/0/g' ${configWireGuardConfigFilePath}
+
+        sed -i 's/engage\.cloudflareclient\.com/162\.159\.192\.1/g' ${configWireGuardConfigFilePath}
+        sed -i 's/\[2606\:4700\:d0\:\:a29f\:c001\]/162\.159\.192\.1/g' ${configWireGuardConfigFilePath}
+        
+        sed -i 's/^DNS = 1\.1\.1\.1/DNS = 8\.8\.8\.8,1\.1\.1\.1,9\.9\.9\.10/g' ${configWireGuardConfigFilePath}
+        sed -i 's/^DNS = 2620:fe\:\:10,2001\:4860\:4860\:\:8888,2606\:4700\:4700\:\:1111/DNS = 8\.8\.8\.8,1\.1\.1\.1,9\.9\.9\.10/g' ${configWireGuardConfigFilePath}
+
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+        echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+        echo "nameserver 9.9.9.9" >> /etc/resolv.conf
+        echo "nameserver 9.9.9.10" >> /etc/resolv.conf
+
+        echo
+        green " Wireguard 已成功切换到 对VPS服务器的 IPv6 网络支持"
+    fi
+    
+    green " ================================================== "
+    echo
+    green " Wireguard 配置信息如下 配置文件路径: ${configWireGuardConfigFilePath} "
+    cat ${configWireGuardConfigFilePath}
+    green " ================================================== "
+    echo
+
+    if [[ -n $1 ]]; then
+        ${sudoCmd} systemctl start wg-quick@wgcf
+    else
+        preferIPV4
+    fi
+}
+
+
+function preferIPV4(){
+
+    if [[ -f "/etc/gai.conf" ]]; then
+        sed -i '/^precedence \:\:ffff\:0\:0/d' /etc/gai.conf
+        sed -i '/^label 2002\:\:\/16/d' /etc/gai.conf
+    fi
+
+    if [[ -z $1 ]]; then
+        
+        echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+
+        echo
+        green " VPS服务器已成功设置为 IPv4 优先访问网络"
+
+    else
+
+        green " ================================================== "
+        yellow " 请为服务器设置 IPv4 还是 IPv6 优先访问: "
+        echo
+        green " 1 优先 IPv4 访问网络 (用于 给只有 IPv6 的 VPS主机添加 IPv4 网络支持)"
+        green " 2 优先 IPv6 访问网络 (用于 解锁 Netflix 限制 和避免弹出 Google reCAPTCHA 人机验证)"
+        green " 3 删除 IPv4 或 IPv6 优先访问的设置, 还原为系统默认配置"
+        echo
+        red " 注意: 选2后 优先使用 IPv6 访问网络可能造成无法访问 某些不支持IPv6的网站! "
+        red " 注意: 解锁Netflix限制和避免弹出Google人机验证 一般不需要选择2设置IPv6优先访问, 可以在V2ray的配置中单独设置对Netfile和Google使用IPv6访问 "
+        red " 注意: 由于 trojan 或 trojan-go 不支持配置 使用IPv6优先访问Netfile和Google, 可以选择2 开启服务器优先IPv6访问, 解决 trojan-go 解锁Netfile和Google人机验证问题"
+        echo
+        read -p "请选择 IPv4 还是 IPv6 优先访问? 直接回车默认选1, 请输入[1/2/3]:" isPreferIPv4Input
+        isPreferIPv4Input=${isPreferIPv4Input:-1}
+
+        if [[ ${isPreferIPv4Input} == [2] ]]; then
+
+            # 设置 IPv6 优先
+            echo "label 2002::/16   2" >> /etc/gai.conf
+
+            echo
+            green " VPS服务器已成功设置为 IPv6 优先访问网络 "
+        elif [[ ${isPreferIPv4Input} == [3] ]]; then
+
+            echo
+            green " VPS服务器 已删除 IPv4 或 IPv6 优先访问的设置, 还原为系统默认配置 "  
+        else
+            # 设置 IPv4 优先
+            echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+            
+            echo
+            green " VPS服务器已成功设置为 IPv4 优先访问网络 "    
+        fi
+
+        green " ================================================== "
+        echo
+        yellow " 验证 IPv4 或 IPv6 访问网络优先级测试, 命令: curl ip.p3terx.com " 
+        echo  
+        curl ip.p3terx.com
+        echo
+        green " 上面信息显示 如果是IPv4地址 则VPS服务器已设置为 IPv4优先访问. 如果是IPv6地址则已设置为 IPv6优先访问 "   
+        green " ================================================== "
+
+    fi
+    echo
+
+}
 
 function removeWireguard(){
     green " ================================================== "
     red " 准备卸载已安装 Wireguard 和 Cloudflare Warp 命令行工具 Wgcf "
     green " ================================================== "
 
-    if [[ -f "${configWgcfBinPath}/wgcf" || -f "${configWgcfConfigFilePath}/wgcf" || -f "/wgcf" ]]; then
+    if [[ -f "${configWgcfBinPath}/wgcf" || -f "${configWgcfConfigFolderPath}/wgcf" || -f "/wgcf" ]]; then
         ${sudoCmd} systemctl stop wg-quick@wgcf.service
         ${sudoCmd} systemctl disable wg-quick@wgcf.service
     else 
@@ -1754,7 +2223,7 @@ function removeWireguard(){
     $osSystemPackage -y remove wireguard
 
     rm -f ${configWgcfBinPath}/wgcf
-    rm -rf ${configWgcfConfigFilePath}
+    rm -rf ${configWgcfConfigFolderPath}
     rm -rf ${configWireGuardConfigFileFolder}
 
     rm -f ${osSystemMdPath}wg-quick@wgcf.service
@@ -1766,7 +2235,11 @@ function removeWireguard(){
 
     [ -d "/etc/wireguard" ] && ("rm -rf /etc/wireguard")
 
-    sed -i '/nameserver 8.8.8.8/d' /etc/resolv.conf
+    sed -i '/nameserver 8\.8\.8\.8/d' /etc/resolv.conf
+    sed -i '/nameserver 8\.8\.4\.4/d' /etc/resolv.conf
+    sed -i '/nameserver 1\.1\.1\.1/d' /etc/resolv.conf
+    sed -i '/nameserver 9\.9\.9\.9/d' /etc/resolv.conf
+    sed -i '/nameserver 9\.9\.9\.10/d' /etc/resolv.conf
 
 
     modprobe -r wireguard
@@ -1779,6 +2252,94 @@ function removeWireguard(){
 }
 
 
+function checkWireguardBootStatus(){
+    echo
+    isWireguardBootSuccess=$(systemctl status wg-quick@wgcf | grep -E "Active: active")
+    if [[ -z "${isWireguardBootSuccess}" ]]; then
+        green " 状态显示-- Wireguard 已启动失败! 请查看 Wireguard 运行日志, 寻找错误后重启 Wireguard "
+    else
+        green " 状态显示-- Wireguard 已启动成功! "
+    fi
+}
+
+function checkWireguard(){
+    echo
+    green " =================================================="
+    echo
+    green " 1. 查看当前系统内核版本, 检查是否装了多个版本内核导致 Wireguard 启动失败"
+    green " 2. 查看 Wireguard 运行状态"
+    green " 3. 查看 Wireguard 运行日志, 如果 Wireguard 启动失败 请用此项查找问题"
+    green " 4. 启动 Wireguard "
+    green " 5. 停止 Wireguard "
+    green " 6. 重启 Wireguard "
+    green " 7. 查看 Wireguard 配置文件 ${configWireGuardConfigFilePath} "
+    green " 8. 用VI 编辑 Wireguard 配置文件 ${configWireGuardConfigFilePath} "
+    echo
+    green " =================================================="
+    green " 0. 退出脚本"
+    echo
+    read -p "请输入数字:" menuNumberInput
+    case "$menuNumberInput" in
+        1 )
+            showLinuxKernelInfo
+            listInstalledLinuxKernel
+        ;;   
+        2 )
+            echo
+            echo "systemctl status wg-quick@wgcf"
+            systemctl status wg-quick@wgcf
+            red " 请查看上面 Active: 一行信息, 如果文字是绿色 active 则为启动正常, 否则启动失败"
+            checkWireguardBootStatus
+        ;;
+        3 )
+            echo
+            echo "journalctl -n 50 -u wg-quick@wgcf"
+            journalctl -n 50 -u wg-quick@wgcf
+            red " 请查看上面包含 Error 的信息行, 查找启动失败的原因 "
+        ;;        
+        4 )
+            echo
+            echo "systemctl start wg-quick@wgcf"
+            systemctl start wg-quick@wgcf
+            green " Wireguard 已启动 !"
+            checkWireguardBootStatus
+        ;;        
+        5 )
+            echo
+            echo "systemctl stop wg-quick@wgcf"
+            systemctl stop wg-quick@wgcf
+            green " Wireguard 已停止 !"
+        ;;       
+        6 )
+            echo
+            echo "systemctl restart wg-quick@wgcf"
+            systemctl restart wg-quick@wgcf
+            green " Wireguard 已重启 !"
+            checkWireguardBootStatus
+        ;;       
+        7 )
+            echo
+            echo "cat ${configWireGuardConfigFilePath}"
+            cat ${configWireGuardConfigFilePath}
+        ;;       
+        8 )
+            echo
+            echo "vi ${configWireGuardConfigFilePath}"
+            vi ${configWireGuardConfigFilePath}
+        ;; 
+        0 )
+            exit 1
+        ;;
+        * )
+            clear
+            red "请输入正确数字 !"
+            sleep 2s
+            checkWireguard
+        ;;
+    esac
+
+
+}
 
 
 
@@ -1820,11 +2381,11 @@ function start_menu(){
     showLinuxKernelInfoNoDisplay
 
     green " =================================================="
-    green " Linux 内核 一键安装脚本 | 2021-04-15 | By jinwyp | 系统支持：centos7+ / debian10+ / ubuntu16.04+"
+    green " Linux 内核 一键安装脚本 | 2021-04-17 | By jinwyp | 系统支持：centos7+ / debian10+ / ubuntu16.04+"
     green " Linux 内核 4.9 以上都支持开启BBR, 如要开启BBR Plus 则需要安装支持BBR Plus的内核 "
     red " *在任何生产环境中请谨慎使用此脚本, 升级内核有风险, 请做好备份！在某些VPS会导致无法启动! "
     green " =================================================="
-    if [ -z $1 ]; then
+    if [[ -z ${osKernelBBRStatus} ]]; then
         echo -e " 当前系统内核: ${osKernelVersionBackup} (${virtual})   ${Red_font_prefix}未安装 BBR 或 BBR Plus ${Font_color_suffix} 加速内核, 请先安装4.9以上内核 "
     else
         if [ ${systemBBRRunningStatus} = "no" ]; then
@@ -1834,27 +2395,35 @@ function start_menu(){
         fi
         
     fi  
-    echo -e " 当前拥塞控制算法: ${Green_font_prefix}${net_congestion_control}${Font_color_suffix}   当前队列算法: ${Green_font_prefix}${net_qdisc}${Font_color_suffix} "
+    echo -e " 当前拥塞控制算法: ${Green_font_prefix}${net_congestion_control}${Font_color_suffix}    ECN: ${Green_font_prefix}${systemECNStatusText}${Font_color_suffix}   当前队列算法: ${Green_font_prefix}${net_qdisc}${Font_color_suffix} "
 
     echo
-    green " 1. 查看当前系统内核版本, 检查是否支持BBR"
-    green " 2. 开启 BBR 加速"
+    green " 1. 查看当前系统内核版本, 检查是否支持BBR / BBR2 / BBR Plus"
+    green " 2. 开启 BBR 或 BBR2 加速, 开启 BBR2 需要安装 XanMod 内核"
     green " 3. 开启 BBR Plus 加速"
+    green " 4. 优化 系统网络配置"
+    red " 5. 删除 系统网络优化配置"
     echo
-    green " 6. 安装 WireGuard 和 Cloudflare Warp, 用于解锁 google 验证码 和 Netflix 限制"
-    red " 7. 卸载 WireGuard" 
+    green " 6. 安装 WireGuard 和 Cloudflare Warp, 用于解锁 Netflix 限制和避免弹出Google人机验证"
+    green " 7. 重启 WireGuard, 查看 WireGuard 运行状态和错误日志, 如果WireGuard启动失败 请选该项排查错误"
+    red " 8. 卸载 WireGuard" 
+    green " 9. 切换 WireGuard 对VPS服务器的 IPv6 和 IPv4 的网络支持"
+    green " 10. 设置 VPS服务器 IPv4 还是 IPv6 网络优先访问"
     echo
 
     if [[ "${osRelease}" == "centos" ]]; then
-    green " 11. 安装 最新版本内核 5.11, 通过elrepo源安装"
+    green " 11. 安装 最新版本内核 5.12, 通过elrepo源安装"
     green " 12. 安装 最新版本LTS内核 5.4 LTS, 通过elrepo源安装"
     echo
-    green " 13. 安装 内核 4.14 LTS"
-    green " 14. 安装 内核 4.19 LTS"
-    green " 15. 安装 内核 5.4 LTS"
+    green " 13. 安装 内核 4.14 LTS, 下载安装"
+    green " 14. 安装 内核 4.19 LTS, 下载安装"
+    green " 15. 安装 内核 5.4 LTS, 下载安装"
     green " 16. 安装 内核 5.10 LTS, Teddysun 编译 推荐安装此内核"
+    green " 17. 安装 内核 5.11, Teddysun 编译"
+    green " 18. 安装 内核 5.12, 下载安装"
 
     elif [[ "${osRelease}" == "debian" ]]; then
+    # echo
     green " 21. 安装 最新版本LTS内核 5.10 LTS, 通过 Debian 官方源安装"
     echo
     green " 22. 安装 最新版本内核 5.11, 通过 Ubuntu kernel mainline 安装"
@@ -1878,6 +2447,9 @@ function start_menu(){
     green " 36. 安装 BBR Plus 内核 5.9, UJX6N 编译"
     green " 37. 安装 BBR Plus 内核 5.10 LTS, UJX6N 编译"    
     echo
+    green " 41. 安装 XanMod Kernel 内核 5.10 LTS, 官方源安装 "    
+    green " 42. 安装 XanMod Kernel 内核 5.11, 官方源安装 "    
+    echo
     green " =================================================="
     green " 0. 退出脚本"
     echo
@@ -1893,11 +2465,27 @@ function start_menu(){
         3 )
            enableBBRSysctlConfig "bbrplus"
         ;;        
+        4 )
+           addOptimizingSystemConfig
+        ;;        
+        5 )
+           removeOptimizingSystemConfig
+           sysctl -p
+        ;;        
         6 )
            installWireguard
         ;;
         7 )
+           checkWireguard
+        ;;    
+        8 )
            removeWireguard
+        ;;    
+        9 )
+           enableWireguardIPV6OrIPV4 "redo"
+        ;;    
+        10 )
+           preferIPV4 "redo"
         ;;    
         11 )
             linuxKernelToInstallVersion="5.11"
@@ -1925,6 +2513,14 @@ function start_menu(){
             linuxKernelToInstallVersion="5.10"
             installKernel
         ;;
+        17 )
+            linuxKernelToInstallVersion="5.11"
+            installKernel
+        ;;
+        18 )
+            linuxKernelToInstallVersion="5.12"
+            installKernel
+        ;;        
         21 )
             linuxKernelToInstallVersion="5.10"
             isInstallFromRepo="yes"
@@ -1979,6 +2575,18 @@ function start_menu(){
         37 )
             linuxKernelToInstallVersion="5.10"
             linuxKernelToBBRType="bbrplus"
+            installKernel
+        ;;
+        41 )
+            linuxKernelToInstallVersion="5.10"
+            linuxKernelToBBRType="xanmod"
+            isInstallFromRepo="yes"
+            installKernel
+        ;;
+        42 )
+            linuxKernelToInstallVersion="5.11"
+            linuxKernelToBBRType="xanmod"
+            isInstallFromRepo="yes"
             installKernel
         ;;
         88 )
